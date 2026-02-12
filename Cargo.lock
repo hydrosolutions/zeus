@@ -261,6 +261,7 @@ name = "zeus"
 version = "0.1.0"
 dependencies = [
  "zeus-arma",
+ "zeus-warm",
  "zeus-wavelet",
 ]
 
@@ -275,5 +276,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeus-warm"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "zeus-arma",
+ "zeus-wavelet",
+]
+
+[[package]]
 name = "zeus-wavelet"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]

@@ -13,4 +13,5 @@ edition.workspace = true
 
 [dependencies]
 zeus-arma = { path = "crates/arma" }
+zeus-warm = { path = "crates/warm" }
 zeus-wavelet = { path = "crates/wavelet" }

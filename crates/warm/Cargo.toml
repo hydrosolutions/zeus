@@ -1,7 +1,9 @@
 [package]
-name = "zeus-wavelet"
+name = "zeus-warm"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
+zeus-arma = { path = "../arma" }
+zeus-wavelet = { path = "../wavelet" }
 thiserror = "2"
