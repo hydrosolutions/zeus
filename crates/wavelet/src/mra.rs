@@ -167,7 +167,7 @@ impl Mra {
         &self.periods
     }
 
-    /// Returns the variance fraction of each component.
+    /// Returns the variance fraction of each component (uses sample variance, N-1 denominator).
     pub fn variance_fractions(&self) -> &[f64] {
         &self.variance_fractions
     }
@@ -314,14 +314,15 @@ pub fn mra(series: &TimeSeries, config: &MraConfig) -> Result<Mra, WaveletError>
     ))
 }
 
-/// Computes population variance (N denominator) of a data slice.
+/// Computes sample variance (N-1 denominator) of a data slice.
 pub(crate) fn variance(data: &[f64]) -> f64 {
-    let n = data.len() as f64;
-    if n <= 0.0 {
+    let n = data.len();
+    if n < 2 {
         return 0.0;
     }
-    let mean = data.iter().sum::<f64>() / n;
-    data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n
+    let nf = n as f64;
+    let mean = data.iter().sum::<f64>() / nf;
+    data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / (nf - 1.0)
 }
 
 #[cfg(test)]
@@ -604,5 +605,27 @@ mod tests {
         for (i, (mat_col, comp)) in matrix.iter().zip(components.iter()).enumerate() {
             assert_eq!(mat_col, comp, "matrix column {} doesn't match component", i);
         }
+    }
+
+    #[test]
+    fn variance_is_sample_variance() {
+        // Known: sample variance of [2, 4, 4, 4, 5, 5, 7, 9] = 32/7 ≈ 4.571428...
+        // Mean = 5.0, sum of squared deviations = 9+1+1+1+0+0+4+16 = 32
+        let data = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let expected = 32.0 / 7.0; // sum of squared deviations = 32, N-1 = 7
+        let v = variance(&data);
+        assert!(
+            (v - expected).abs() < 1e-10,
+            "variance = {v}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn variance_single_element() {
+        let v = variance(&[42.0]);
+        assert!(
+            v.abs() < f64::EPSILON,
+            "single-element variance = {v}, expected 0.0"
+        );
     }
 }

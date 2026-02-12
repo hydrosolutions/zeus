@@ -1,7 +1,9 @@
 //! Statistical significance testing for the Global Wavelet Spectrum.
 //!
-//! Tests GWS peaks against a red-noise (AR(1)) or white-noise background
-//! using the chi-squared method from Torrence & Compo (1998, Sections 4-5).
+//! GWS values and thresholds are computed in original (pre-standardization) units
+//! using sample variance (N-1 denominator). Tests GWS peaks against a red-noise
+//! (AR(1)) or white-noise background using the chi-squared method from
+//! Torrence & Compo (1998, Sections 4-5).
 
 use statrs::distribution::{ChiSquared, ContinuousCDF};
 use std::f64::consts::PI;
@@ -113,17 +115,18 @@ impl Default for SignificanceConfig {
 
 /// Result of a GWS significance test.
 ///
-/// Contains the COI-masked and unmasked Global Wavelet Spectra,
-/// the significance threshold at each scale, and the decision vector.
+/// All GWS values and thresholds are in original (pre-standardization) units.
+/// See [`CwtResult::global_wavelet_spectrum`](crate::cwt::CwtResult::global_wavelet_spectrum)
+/// for the standardized-unit counterpart.
 #[derive(Clone, Debug)]
 pub struct GwsResult {
     /// Periods (one per scale).
     periods: Vec<f64>,
-    /// COI-masked Global Wavelet Spectrum.
+    /// COI-masked Global Wavelet Spectrum (original units).
     gws_masked: Vec<f64>,
-    /// Full (unmasked) Global Wavelet Spectrum.
+    /// Full (unmasked) Global Wavelet Spectrum (original units).
     gws_unmasked: Vec<f64>,
-    /// Chi-squared significance threshold per scale.
+    /// Chi-squared significance threshold per scale (original units).
     significance_threshold: Vec<f64>,
     /// Whether each scale's GWS exceeds the threshold.
     significant: Vec<bool>,
@@ -169,17 +172,17 @@ impl GwsResult {
         &self.periods
     }
 
-    /// Returns the COI-masked Global Wavelet Spectrum.
+    /// Returns the COI-masked Global Wavelet Spectrum (original units, rescaled from standardized power by `variance`).
     pub fn gws_masked(&self) -> &[f64] {
         &self.gws_masked
     }
 
-    /// Returns the full (unmasked) Global Wavelet Spectrum.
+    /// Returns the full (unmasked) Global Wavelet Spectrum (original units, rescaled from standardized power by `variance`).
     pub fn gws_unmasked(&self) -> &[f64] {
         &self.gws_unmasked
     }
 
-    /// Returns the significance threshold per scale.
+    /// Returns the significance threshold per scale (original units; `theoretical_spectrum * variance * chi2 / dof`).
     pub fn significance_threshold(&self) -> &[f64] {
         &self.significance_threshold
     }
@@ -237,6 +240,10 @@ impl GwsResult {
 
 /// Tests the Global Wavelet Spectrum for significance against a background noise model.
 ///
+/// GWS values are rescaled from standardized CWT power to original units by multiplying
+/// by the sample variance of the input data. The significance threshold is also in
+/// original units, so the comparison is scale-invariant.
+///
 /// # Errors
 ///
 /// | Variant | Trigger |
@@ -287,14 +294,14 @@ pub fn test_significance(
                 sum += power[j][t];
             }
         }
-        gws_masked[j] = sum / n_coi[j].max(1) as f64;
+        gws_masked[j] = data_variance * sum / n_coi[j].max(1) as f64;
     }
 
     // 8. GWS (unmasked)
     let mut gws_unmasked = vec![0.0; n_scales];
     for j in 0..n_scales {
         let sum: f64 = power[j].iter().sum();
-        gws_unmasked[j] = sum / n_times as f64;
+        gws_unmasked[j] = data_variance * sum / n_times as f64;
     }
 
     // 9. Effective DOF
@@ -683,5 +690,61 @@ mod tests {
     fn noise_model_is_copy() {
         fn assert_impl<T: Send + Sync + Copy>() {}
         assert_impl::<NoiseModel>();
+    }
+
+    #[test]
+    fn gws_in_original_units() {
+        // A sine with amplitude 10 should produce GWS values proportional to 10^2
+        let n = 256;
+        let amp = 10.0;
+        let data: Vec<f64> = (0..n)
+            .map(|i| amp * (2.0 * std::f64::consts::PI * i as f64 / 32.0).sin())
+            .collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let cwt_config = CwtConfig::new();
+        let cwt_result = cwt_morlet(&ts, &cwt_config).unwrap();
+
+        let sig_config = SignificanceConfig::new();
+        let result = test_significance(&ts, &cwt_result, &sig_config).unwrap();
+
+        // Peak GWS should be on the order of amp^2 / 2 = 50
+        let peak_gws = result
+            .gws_unmasked()
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            peak_gws > 10.0,
+            "peak GWS = {peak_gws}, expected >> 1 for amplitude {amp}"
+        );
+    }
+
+    #[test]
+    fn significance_decision_scale_invariant() {
+        // Significance decisions must not change when the signal is scaled by 100x
+        let n = 256;
+        let base: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * i as f64 / 32.0).sin())
+            .collect();
+        let scaled: Vec<f64> = base.iter().map(|&x| x * 100.0).collect();
+
+        let cwt_config = CwtConfig::new();
+        let sig_config = SignificanceConfig::new();
+
+        let ts_base = TimeSeries::new(base).unwrap();
+        let cwt_base = cwt_morlet(&ts_base, &cwt_config).unwrap();
+        let sig_base = test_significance(&ts_base, &cwt_base, &sig_config).unwrap();
+
+        let ts_scaled = TimeSeries::new(scaled).unwrap();
+        let cwt_scaled = cwt_morlet(&ts_scaled, &cwt_config).unwrap();
+        let sig_scaled = test_significance(&ts_scaled, &cwt_scaled, &sig_config).unwrap();
+
+        assert_eq!(
+            sig_base.significant(),
+            sig_scaled.significant(),
+            "significance decisions changed when scaling input by 100x:\nbase significant indices: {:?}\nscaled significant indices: {:?}",
+            sig_base.significant_indices(),
+            sig_scaled.significant_indices()
+        );
     }
 }

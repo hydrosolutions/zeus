@@ -36,7 +36,7 @@ pub struct CwtConfig {
     s0: Option<f64>,
     /// Number of scales (None = auto-computed).
     j_max: Option<usize>,
-    /// Whether to subtract mean and divide by std.
+    /// Whether to subtract mean and divide by sample standard deviation (N-1 denominator).
     standardize: bool,
 }
 
@@ -131,8 +131,8 @@ impl Default for CwtConfig {
 
 /// Result of a Continuous Wavelet Transform.
 ///
-/// Contains the complex wavelet coefficients, scales, periods,
-/// cone of influence, and signal statistics.
+/// Contains the complex wavelet coefficients (in standardized space when
+/// `standardize = true`), scales, periods, cone of influence, and signal statistics.
 #[derive(Clone, Debug)]
 pub struct CwtResult {
     /// Complex wavelet coefficients `[n_scales][n_times]`.
@@ -145,7 +145,7 @@ pub struct CwtResult {
     coi: Vec<f64>,
     /// Original signal mean.
     signal_mean: f64,
-    /// Original signal standard deviation.
+    /// Original signal sample standard deviation (N-1 denominator).
     signal_std: f64,
     /// Time step used.
     dt: f64,
@@ -203,7 +203,9 @@ impl CwtResult {
         self.signal_mean
     }
 
-    /// Returns the original signal standard deviation.
+    /// Returns the original signal sample standard deviation (N-1 denominator).
+    ///
+    /// To rescale standardized power back to original units, multiply by `signal_std().powi(2)`.
     pub fn signal_std(&self) -> f64 {
         self.signal_std
     }
@@ -228,7 +230,7 @@ impl CwtResult {
         self.coi.len()
     }
 
-    /// Computes the wavelet power spectrum `|W(s,t)|^2`.
+    /// Computes the wavelet power spectrum `|W(s,t)|^2` in standardized units.
     ///
     /// Returns a `[n_scales][n_times]` matrix of power values.
     pub fn power(&self) -> Vec<Vec<f64>> {
@@ -238,10 +240,12 @@ impl CwtResult {
             .collect()
     }
 
-    /// Computes the global wavelet spectrum.
+    /// Computes the global wavelet spectrum in standardized units.
     ///
     /// For each scale, returns the time-averaged power:
     /// `(1/N) * sum_t |W(s,t)|^2`.
+    ///
+    /// For original-unit GWS, see [`GwsResult::gws_unmasked`](crate::significance::GwsResult::gws_unmasked).
     pub fn global_wavelet_spectrum(&self) -> Vec<f64> {
         let n = self.n_times() as f64;
         self.coefficients
@@ -275,7 +279,7 @@ pub fn cwt_morlet(series: &TimeSeries, config: &CwtConfig) -> Result<CwtResult, 
 
     // Compute signal statistics
     let mean = data.iter().sum::<f64>() / n as f64;
-    let variance = data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n as f64;
+    let variance = data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / (n as f64 - 1.0);
     let std_dev = variance.sqrt();
     let effective_std = if std_dev > f64::EPSILON { std_dev } else { 1.0 };
 
@@ -738,7 +742,7 @@ mod tests {
             .iter()
             .map(|&x| (x - expected_mean).powi(2))
             .sum::<f64>()
-            / n;
+            / (n - 1.0);
         let expected_std = expected_var.sqrt();
 
         assert!(

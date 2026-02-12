@@ -539,7 +539,7 @@ pub fn filter_warm_pool(
             if let Ok(gws_result) = test_significance(&ts, cwt_result, bounds.significance_config())
             {
                 identify_significant_peaks(
-                    &gws,
+                    gws_result.gws_unmasked(),
                     gws_result.significance_threshold(),
                     &periods,
                     bounds.n_sig_peaks_max(),
