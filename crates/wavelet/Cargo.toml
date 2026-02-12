@@ -1,0 +1,6 @@
+[package]
+name = "zeus-wavelet"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
