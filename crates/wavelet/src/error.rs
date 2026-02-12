@@ -45,6 +45,18 @@ pub enum WaveletError {
     /// Returned when the MRA computation fails.
     #[error("MRA failed: {0}")]
     MraFailed(String),
+
+    /// Returned when the CWT computation fails.
+    #[error("CWT failed: {0}")]
+    CwtFailed(String),
+
+    /// Returned when wavelet significance testing fails.
+    #[error("significance test failed: {0}")]
+    SignificanceFailed(String),
+
+    /// Returned when a configuration parameter is invalid.
+    #[error("invalid configuration: {0}")]
+    InvalidConfig(String),
 }
 
 #[cfg(test)]
@@ -104,6 +116,27 @@ mod tests {
     fn error_mra_failed() {
         let err = WaveletError::MraFailed("level mismatch".into());
         assert_eq!(err.to_string(), "MRA failed: level mismatch");
+    }
+
+    #[test]
+    fn error_cwt_failed() {
+        let err = WaveletError::CwtFailed("FFT error".into());
+        assert_eq!(err.to_string(), "CWT failed: FFT error");
+    }
+
+    #[test]
+    fn error_significance_failed() {
+        let err = WaveletError::SignificanceFailed("invalid DOF".into());
+        assert_eq!(err.to_string(), "significance test failed: invalid DOF");
+    }
+
+    #[test]
+    fn error_invalid_config() {
+        let err = WaveletError::InvalidConfig("omega0 must be >= 5".into());
+        assert_eq!(
+            err.to_string(),
+            "invalid configuration: omega0 must be >= 5"
+        );
     }
 
     #[test]

@@ -315,7 +315,7 @@ pub fn mra(series: &TimeSeries, config: &MraConfig) -> Result<Mra, WaveletError>
 }
 
 /// Computes population variance (N denominator) of a data slice.
-fn variance(data: &[f64]) -> f64 {
+pub(crate) fn variance(data: &[f64]) -> f64 {
     let n = data.len() as f64;
     if n <= 0.0 {
         return 0.0;

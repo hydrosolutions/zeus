@@ -2,7 +2,16 @@
 //!
 //! Wavelet transforms for weather signal decomposition and reconstruction.
 //!
-//! ## Analysis Pipeline
+//! Provides two complementary wavelet analysis paths:
+//!
+//! - **MODWT / MRA** --- discrete multiresolution decomposition for additive
+//!   signal separation.
+//! - **CWT / Significance** --- continuous wavelet transform for time-frequency
+//!   power analysis with statistical significance testing.
+//!
+//! Both paths combine via [`analyze_additive()`] for a single-call pipeline.
+//!
+//! ## Analysis Pipelines
 //!
 //! ```mermaid
 //! graph LR
@@ -14,6 +23,15 @@
 //!     D --> F[".smooth()"]
 //!     D --> G[".variance_fractions()"]
 //!     D --> H[".to_matrix()"]
+//!     B -->|"cwt_morlet(&ts, &config)?"| I["CwtResult"]
+//!     I --> J[".power()"]
+//!     I --> K[".global_wavelet_spectrum()"]
+//!     I -->|"test_significance(&ts, &cwt, &config)?"| L["GwsResult"]
+//!     L --> M[".significant_periods()"]
+//!     B -->|"analyze_additive(&ts, &config)?"| N["WaveletAdditive"]
+//!     N --> O[".mra()"]
+//!     N --> P[".significant_levels()"]
+//!     N --> Q[".gws_result()"]
 //! ```
 //!
 //! ## Supported Filters
@@ -41,14 +59,34 @@
 //! }
 //! ```
 
+mod additive;
+mod cwt;
 mod error;
 mod filter;
 mod modwt;
 mod mra;
 mod series;
+mod significance;
 
+// --- Re-export Complex for CwtResult consumers ---
+pub use num_complex::Complex;
+
+// --- Error ---
 pub use error::WaveletError;
+
+// --- Core types ---
 pub use filter::WaveletFilter;
+pub use series::TimeSeries;
+
+// --- MODWT / MRA ---
 pub use modwt::{ModwtCoeffs, ModwtConfig, imodwt, max_modwt_level, modwt};
 pub use mra::{Mra, MraConfig, mra, select_levels};
-pub use series::TimeSeries;
+
+// --- CWT ---
+pub use cwt::{CwtConfig, CwtResult, cwt_morlet};
+
+// --- Significance testing ---
+pub use significance::{GwsResult, NoiseModel, SignificanceConfig, test_significance};
+
+// --- Additive decomposition pipeline ---
+pub use additive::{AdditiveConfig, WaveletAdditive, analyze_additive};
