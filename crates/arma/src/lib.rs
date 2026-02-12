@@ -43,6 +43,8 @@ mod selection;
 mod spec;
 
 pub(crate) mod kalman;
+pub(crate) mod optimizer;
+pub(crate) mod params;
 pub(crate) mod state_space;
 
 pub use error::ArmaError;

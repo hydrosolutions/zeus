@@ -2,7 +2,6 @@
 
 use crate::error::ArmaError;
 use crate::fit::ArmaFit;
-#[allow(unused_imports)]
 use crate::spec::ArmaSpec;
 
 /// Selects the best ARMA(p,q) model from a grid search over orders
@@ -26,6 +25,68 @@ use crate::spec::ArmaSpec;
 /// let best = select_best_aic(&data, 3, 2)?;
 /// println!("Best order: {:?}, AIC = {}", best.order(), best.aic());
 /// ```
-pub fn select_best_aic(_data: &[f64], _max_p: usize, _max_q: usize) -> Result<ArmaFit, ArmaError> {
-    todo!()
+pub fn select_best_aic(data: &[f64], max_p: usize, max_q: usize) -> Result<ArmaFit, ArmaError> {
+    let mut best: Option<ArmaFit> = None;
+
+    for p in 0..=max_p {
+        for q in 0..=max_q {
+            match ArmaSpec::new(p, q).fit(data) {
+                Ok(fit) => {
+                    let dominated = best.as_ref().is_some_and(|b| b.aic() <= fit.aic());
+                    if !dominated {
+                        best = Some(fit);
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+
+    best.ok_or(ArmaError::AllCandidatesFailed { max_p, max_q })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    use rand_distr::{Distribution, Normal};
+
+    #[test]
+    fn basic_usage() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let data: Vec<f64> = (0..500).map(|_| normal.sample(&mut rng)).collect();
+        let fit = select_best_aic(&data, 2, 2).unwrap();
+        assert!(fit.log_likelihood().is_finite());
+        assert!(fit.sigma2() > 0.0);
+    }
+
+    #[test]
+    fn all_fail_returns_error() {
+        // Constant data should fail for all orders
+        let data = vec![5.0; 100];
+        let result = select_best_aic(&data, 2, 2);
+        assert!(matches!(result, Err(ArmaError::AllCandidatesFailed { .. })));
+    }
+
+    #[test]
+    fn max_zero_gives_arma00() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let data: Vec<f64> = (0..200).map(|_| normal.sample(&mut rng)).collect();
+        let fit = select_best_aic(&data, 0, 0).unwrap();
+        assert_eq!(fit.order(), (0, 0));
+    }
+
+    #[test]
+    fn white_noise_prefers_simple() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let data: Vec<f64> = (0..1000).map(|_| normal.sample(&mut rng)).collect();
+        let fit = select_best_aic(&data, 2, 2).unwrap();
+        let (p, q) = fit.order();
+        // White noise: AIC should prefer (0,0) or a simple model
+        let total = p + q;
+        assert!(total <= 2, "Expected simple model, got ({}, {})", p, q);
+    }
 }

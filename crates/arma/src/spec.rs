@@ -63,8 +63,7 @@ impl ArmaSpec {
     /// | [`ArmaError::NonStationary`] | estimated AR roots inside unit circle |
     /// | [`ArmaError::OptimizationFailed`] | optimizer fails to converge |
     pub fn fit(&self, data: &[f64]) -> Result<ArmaFit, ArmaError> {
-        let _ = data;
-        todo!()
+        crate::optimizer::fit_arma(self.p, self.q, data)
     }
 }
 
@@ -103,5 +102,54 @@ mod tests {
     fn spec_debug_format() {
         let debug_str = format!("{:?}", ArmaSpec::new(1, 2));
         assert!(debug_str.contains("ArmaSpec"));
+    }
+
+    #[test]
+    fn fit_empty_data() {
+        let err = ArmaSpec::new(1, 0).fit(&[]).unwrap_err();
+        assert!(matches!(err, ArmaError::EmptyData));
+    }
+
+    #[test]
+    fn fit_insufficient_data() {
+        let err = ArmaSpec::new(2, 0).fit(&[1.0, 2.0]).unwrap_err();
+        assert!(matches!(err, ArmaError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn fit_nan_data() {
+        let err = ArmaSpec::new(1, 0).fit(&[1.0, f64::NAN, 3.0]).unwrap_err();
+        assert!(matches!(err, ArmaError::NonFiniteData));
+    }
+
+    #[test]
+    fn fit_inf_data() {
+        let err = ArmaSpec::new(1, 0)
+            .fit(&[1.0, f64::INFINITY, 3.0])
+            .unwrap_err();
+        assert!(matches!(err, ArmaError::NonFiniteData));
+    }
+
+    #[test]
+    fn fit_constant_data() {
+        let err = ArmaSpec::new(1, 0)
+            .fit(&[5.0, 5.0, 5.0, 5.0, 5.0])
+            .unwrap_err();
+        assert!(matches!(err, ArmaError::ConstantData));
+    }
+
+    #[test]
+    fn fit_valid_data() {
+        use rand::SeedableRng;
+        use rand_distr::{Distribution, Normal};
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let data: Vec<f64> = (0..200).map(|_| normal.sample(&mut rng)).collect();
+
+        let fit = ArmaSpec::new(1, 0).fit(&data).unwrap();
+        assert_eq!(fit.order(), (1, 0));
+        assert!(fit.sigma2() > 0.0);
+        assert!(fit.log_likelihood().is_finite());
     }
 }
