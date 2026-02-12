@@ -1,12 +1,15 @@
-//! Nelder-Mead optimizer for ARMA maximum-likelihood estimation.
+//! L-BFGS optimizer with Nelder-Mead fallback for ARMA maximum-likelihood estimation.
 //!
 //! Wraps the `argmin` crate to minimize the negative concentrated
-//! log-likelihood over unconstrained PACF parameters.
+//! log-likelihood over unconstrained PACF parameters.  Gradients are
+//! approximated via central finite differences.
 //!
 //! **Not part of the public API.**
 
-use argmin::core::{CostFunction, Executor};
+use argmin::core::{CostFunction, Executor, Gradient};
+use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::neldermead::NelderMead;
+use argmin::solver::quasinewton::LBFGS;
 
 use crate::error::ArmaError;
 use crate::fit::ArmaFit;
@@ -20,7 +23,7 @@ use crate::state_space::StateSpace;
 /// This is the full pipeline:
 /// 1. Validate data
 /// 2. Center (subtract mean)
-/// 3. Optimize concentrated log-likelihood via Nelder-Mead
+/// 3. Optimize via L-BFGS (with Nelder-Mead fallback)
 /// 4. Extract final parameters via full Kalman pass
 pub(crate) fn fit_arma(p: usize, q: usize, data: &[f64]) -> Result<ArmaFit, ArmaError> {
     // 1. Validate
@@ -64,40 +67,18 @@ pub(crate) fn fit_arma(p: usize, q: usize, data: &[f64]) -> Result<ArmaFit, Arma
         ));
     }
 
-    // 4. Build simplex for Nelder-Mead
+    // 4. Optimize: L-BFGS with Nelder-Mead fallback
     let dim = p + q;
-    let mut simplex: Vec<Vec<f64>> = Vec::with_capacity(dim + 1);
-    simplex.push(vec![0.0; dim]); // origin
-    for i in 0..dim {
-        let mut vertex = vec![0.0; dim];
-        vertex[i] = 0.5;
-        simplex.push(vertex);
-    }
+    let init_param = vec![0.0; dim];
+    let best_params = lbfgs_optimize(&centered, p, &init_param)
+        .or_else(|_| nelder_mead_optimize(&centered, p, dim))?;
 
-    // 5. Set up cost function
-    let cost = ArmaCost { data: &centered, p };
-
-    // 6. Run Nelder-Mead
-    let solver = NelderMead::new(simplex)
-        .with_sd_tolerance(1e-8)
-        .map_err(|_| ArmaError::OptimizationFailed)?;
-    let result = Executor::new(cost, solver)
-        .configure(|state| state.max_iters(1000))
-        .run()
-        .map_err(|_| ArmaError::OptimizationFailed)?;
-
-    let best_params = result
-        .state()
-        .best_param
-        .as_ref()
-        .ok_or(ArmaError::OptimizationFailed)?;
-
-    // 7. Extract final coefficients
+    // 5. Extract final coefficients
     let (alpha, beta) = best_params.split_at(p);
     let ar = params::unconstrained_to_coeffs(alpha);
     let ma = params::unconstrained_to_coeffs(beta);
 
-    // 8. Run full Kalman for sigma2, residuals, log-likelihood
+    // 6. Run full Kalman for sigma2, residuals, log-likelihood
     let ss = StateSpace::new(&ar, &ma);
     let output = kalman::kalman_full(&ss, &centered)?;
 
@@ -110,6 +91,59 @@ pub(crate) fn fit_arma(p: usize, q: usize, data: &[f64]) -> Result<ArmaFit, Arma
         output.log_likelihood,
         mean,
     ))
+}
+
+/// Attempts L-BFGS optimization of the ARMA concentrated log-likelihood.
+fn lbfgs_optimize(data: &[f64], p: usize, init: &[f64]) -> Result<Vec<f64>, ArmaError> {
+    let cost = ArmaCost { data, p };
+    let linesearch = MoreThuenteLineSearch::new()
+        .with_c(1e-4, 0.9)
+        .map_err(|_| ArmaError::OptimizationFailed)?;
+    let solver = LBFGS::new(linesearch, 7)
+        .with_tolerance_grad(1e-8)
+        .map_err(|_| ArmaError::OptimizationFailed)?
+        .with_tolerance_cost(1e-12)
+        .map_err(|_| ArmaError::OptimizationFailed)?;
+    let result = Executor::new(cost, solver)
+        .configure(|state| state.param(init.to_vec()).max_iters(200))
+        .run()
+        .map_err(|_| ArmaError::OptimizationFailed)?;
+    let best = result
+        .state()
+        .best_param
+        .clone()
+        .ok_or(ArmaError::OptimizationFailed)?;
+    let best_cost = result.state().best_cost;
+    // Reject if the cost is non-finite or if any parameter has saturated
+    // the tanh mapping (|alpha| > 5 means |tanh(alpha)| > 0.9999).
+    if !best_cost.is_finite() || best.iter().any(|x| x.abs() > 5.0) {
+        return Err(ArmaError::OptimizationFailed);
+    }
+    Ok(best)
+}
+
+/// Falls back to Nelder-Mead if L-BFGS fails.
+fn nelder_mead_optimize(data: &[f64], p: usize, dim: usize) -> Result<Vec<f64>, ArmaError> {
+    let mut simplex: Vec<Vec<f64>> = Vec::with_capacity(dim + 1);
+    simplex.push(vec![0.0; dim]);
+    for i in 0..dim {
+        let mut vertex = vec![0.0; dim];
+        vertex[i] = 0.5;
+        simplex.push(vertex);
+    }
+    let cost = ArmaCost { data, p };
+    let solver = NelderMead::new(simplex)
+        .with_sd_tolerance(1e-8)
+        .map_err(|_| ArmaError::OptimizationFailed)?;
+    let result = Executor::new(cost, solver)
+        .configure(|state| state.max_iters(1000))
+        .run()
+        .map_err(|_| ArmaError::OptimizationFailed)?;
+    result
+        .state()
+        .best_param
+        .clone()
+        .ok_or(ArmaError::OptimizationFailed)
 }
 
 /// Cost function for argmin: negative concentrated log-likelihood.
@@ -132,6 +166,31 @@ impl CostFunction for ArmaCost<'_> {
             Ok(loglik) if loglik.is_finite() => Ok(-loglik),
             _ => Ok(f64::MAX),
         }
+    }
+}
+
+impl Gradient for ArmaCost<'_> {
+    type Param = Vec<f64>;
+    type Gradient = Vec<f64>;
+
+    fn gradient(&self, params: &Self::Param) -> Result<Self::Gradient, argmin::core::Error> {
+        let dim = params.len();
+        let mut grad = vec![0.0; dim];
+        for i in 0..dim {
+            let h = f64::EPSILON.cbrt() * 1.0_f64.max(params[i].abs());
+            let mut forward = params.clone();
+            forward[i] += h;
+            let mut backward = params.clone();
+            backward[i] -= h;
+            let f_plus = self.cost(&forward)?;
+            let f_minus = self.cost(&backward)?;
+            if f_plus >= f64::MAX / 2.0 || f_minus >= f64::MAX / 2.0 {
+                grad[i] = 0.0;
+            } else {
+                grad[i] = (f_plus - f_minus) / (2.0 * h);
+            }
+        }
+        Ok(grad)
     }
 }
 
@@ -243,5 +302,19 @@ mod tests {
             "Expected phi ≈ 0 for white noise, got {}",
             fit.ar()[0]
         );
+    }
+
+    #[test]
+    fn gradient_is_finite() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let data: Vec<f64> = (0..200).map(|_| normal.sample(&mut rng)).collect();
+        let cost = ArmaCost { data: &data, p: 1 };
+        let params = vec![0.0, 0.0]; // ARMA(1,1) at origin
+        let grad = cost.gradient(&params).unwrap();
+        assert_eq!(grad.len(), 2);
+        for (i, g) in grad.iter().enumerate() {
+            assert!(g.is_finite(), "gradient[{}] = {}", i, g);
+        }
     }
 }
