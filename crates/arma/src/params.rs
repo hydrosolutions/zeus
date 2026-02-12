@@ -36,6 +36,53 @@ pub(crate) fn unconstrained_to_coeffs(alpha: &[f64]) -> Vec<f64> {
     phi
 }
 
+/// Buffer-based variant of [`unconstrained_to_coeffs`] that writes into
+/// pre-allocated output, eliminating heap allocation per call.
+///
+/// `alpha` is the unconstrained input, `out` receives the coefficients.
+/// Both slices must have the same length.
+#[allow(dead_code)]
+pub(crate) fn unconstrained_to_coeffs_buf(alpha: &[f64], out: &mut [f64]) {
+    let p = alpha.len();
+    debug_assert_eq!(p, out.len());
+    if p == 0 {
+        return;
+    }
+
+    // For large orders, fall back to the allocating version
+    if p > 8 {
+        let result = unconstrained_to_coeffs(alpha);
+        out.copy_from_slice(&result);
+        return;
+    }
+
+    // Step 1: map each unconstrained parameter to (-1, 1) via tanh
+    // Use a stack-allocated scratch buffer for partial autocorrelations
+    // and the "prev" array. Max practical order is 8.
+    let mut r_buf = [0.0_f64; 8];
+    let mut prev_buf = [0.0_f64; 8];
+    let r = &mut r_buf[..p];
+    let prev = &mut prev_buf[..p];
+
+    for i in 0..p {
+        r[i] = alpha[i].tanh();
+    }
+
+    // Step 2: Levinson-Durbin recursion
+    out[0] = r[0];
+    for val in out.iter_mut().take(p).skip(1) {
+        *val = 0.0;
+    }
+
+    for k in 1..p {
+        prev[..p].copy_from_slice(&out[..p]);
+        out[k] = r[k];
+        for j in 0..k {
+            out[j] = prev[j] - r[k] * prev[k - 1 - j];
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +251,43 @@ mod tests {
                 a,
                 pos[0],
                 neg[0]
+            );
+        }
+    }
+
+    #[test]
+    fn buf_matches_alloc() {
+        let cases: &[&[f64]] = &[&[], &[0.5], &[0.5, 0.3], &[1.0, -2.0, 3.0]];
+        for alpha in cases {
+            let expected = unconstrained_to_coeffs(alpha);
+            let mut buf = vec![0.0; alpha.len()];
+            unconstrained_to_coeffs_buf(alpha, &mut buf);
+            for (i, (&e, &b)) in expected.iter().zip(buf.iter()).enumerate() {
+                assert!(
+                    (e - b).abs() < 1e-15,
+                    "Mismatch at [{}] for alpha={:?}: expected {}, got {}",
+                    i,
+                    alpha,
+                    e,
+                    b,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buf_large_order() {
+        let alpha: Vec<f64> = (0..10).map(|i| (i as f64) * 0.1).collect();
+        let expected = unconstrained_to_coeffs(&alpha);
+        let mut buf = vec![0.0; alpha.len()];
+        unconstrained_to_coeffs_buf(&alpha, &mut buf);
+        for (i, (&e, &b)) in expected.iter().zip(buf.iter()).enumerate() {
+            assert!(
+                (e - b).abs() < 1e-15,
+                "Mismatch at [{}] for large order: expected {}, got {}",
+                i,
+                e,
+                b,
             );
         }
     }

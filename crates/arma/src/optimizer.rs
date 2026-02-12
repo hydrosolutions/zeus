@@ -2,9 +2,11 @@
 //!
 //! Wraps the `argmin` crate to minimize the negative concentrated
 //! log-likelihood over unconstrained PACF parameters.  Gradients are
-//! approximated via central finite differences.
+//! approximated via forward finite differences.
 //!
 //! **Not part of the public API.**
+
+use std::cell::RefCell;
 
 use argmin::core::{CostFunction, Executor, Gradient};
 use argmin::solver::linesearch::BacktrackingLineSearch;
@@ -26,50 +28,37 @@ const PENALTY_COST: f64 = 1e18;
 /// Finite-difference step for gradient approximation, matching R's `ndeps`.
 const FD_STEP: f64 = 1e-3;
 
-/// CSS (Conditional Sum of Squares) objective — no Kalman filter needed.
-///
-/// Computes residuals by direct AR/MA recursion, skips the first
-/// `ncond = max(p, q)` values, returns `0.5 * ln(mean(e²))`.
-fn css_cost(params: &[f64], data: &[f64], p: usize, q: usize) -> f64 {
-    let (alpha, beta) = params.split_at(p);
-    let ar = params::unconstrained_to_coeffs(alpha);
-    let ma = params::unconstrained_to_coeffs(beta);
-    if ar.iter().chain(ma.iter()).any(|c| !c.is_finite()) {
-        return PENALTY_COST;
-    }
-    let n = data.len();
-    let ncond = p.max(q);
-    let mut resid = vec![0.0; n];
-    for t in 0..n {
-        let mut e_t = data[t];
-        for i in 0..p {
-            if t > i {
-                e_t -= ar[i] * data[t - 1 - i];
-            }
-        }
-        for j in 0..q {
-            if t > j {
-                e_t -= ma[j] * resid[t - 1 - j];
-            }
-        }
-        resid[t] = e_t;
-    }
-    let effective_n = n - ncond;
-    if effective_n == 0 {
-        return PENALTY_COST;
-    }
-    let msr: f64 = resid[ncond..].iter().map(|e| e * e).sum::<f64>() / effective_n as f64;
-    if msr <= 0.0 || !msr.is_finite() {
-        return PENALTY_COST;
-    }
-    0.5 * msr.ln()
+/// Pre-allocated scratch buffers for CSS optimization.
+struct CssScratch {
+    ar: Vec<f64>,
+    ma: Vec<f64>,
+    resid: Vec<f64>,
 }
 
 /// Argmin wrapper for CSS optimization via Nelder-Mead.
+///
+/// Uses [`RefCell`]-wrapped scratch buffers to eliminate heap allocations
+/// during the Nelder-Mead optimization loop.
 struct CssCost<'a> {
     data: &'a [f64],
     p: usize,
     q: usize,
+    scratch: RefCell<CssScratch>,
+}
+
+impl<'a> CssCost<'a> {
+    fn new(data: &'a [f64], p: usize, q: usize) -> Self {
+        Self {
+            data,
+            p,
+            q,
+            scratch: RefCell::new(CssScratch {
+                ar: vec![0.0; p],
+                ma: vec![0.0; q],
+                resid: vec![0.0; data.len()],
+            }),
+        }
+    }
 }
 
 impl CostFunction for CssCost<'_> {
@@ -77,7 +66,48 @@ impl CostFunction for CssCost<'_> {
     type Output = f64;
 
     fn cost(&self, params: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
-        Ok(css_cost(params, self.data, self.p, self.q))
+        let mut scratch = self.scratch.borrow_mut();
+        let (alpha, beta) = params.split_at(self.p);
+        params::unconstrained_to_coeffs_buf(alpha, &mut scratch.ar);
+        params::unconstrained_to_coeffs_buf(beta, &mut scratch.ma);
+        if scratch
+            .ar
+            .iter()
+            .chain(scratch.ma.iter())
+            .any(|c| !c.is_finite())
+        {
+            return Ok(PENALTY_COST);
+        }
+        let n = self.data.len();
+        let ncond = self.p.max(self.q);
+        // Zero residuals
+        for e in scratch.resid.iter_mut() {
+            *e = 0.0;
+        }
+        for t in 0..n {
+            let mut e_t = self.data[t];
+            for i in 0..self.p {
+                if t > i {
+                    e_t -= scratch.ar[i] * self.data[t - 1 - i];
+                }
+            }
+            for j in 0..self.q {
+                if t > j {
+                    e_t -= scratch.ma[j] * scratch.resid[t - 1 - j];
+                }
+            }
+            scratch.resid[t] = e_t;
+        }
+        let effective_n = n - ncond;
+        if effective_n == 0 {
+            return Ok(PENALTY_COST);
+        }
+        let msr: f64 =
+            scratch.resid[ncond..].iter().map(|e| e * e).sum::<f64>() / effective_n as f64;
+        if msr <= 0.0 || !msr.is_finite() {
+            return Ok(PENALTY_COST);
+        }
+        Ok(0.5 * msr.ln())
     }
 }
 
@@ -94,7 +124,7 @@ fn css_optimize(data: &[f64], p: usize, q: usize) -> Result<Vec<f64>, ArmaError>
         v[i] = 0.5;
         simplex.push(v);
     }
-    let cost = CssCost { data, p, q };
+    let cost = CssCost::new(data, p, q);
     let solver = NelderMead::new(simplex)
         .with_sd_tolerance(1e-6)
         .map_err(|_| ArmaError::OptimizationFailed)?;
@@ -191,7 +221,8 @@ pub(crate) fn fit_arma(p: usize, q: usize, data: &[f64]) -> Result<ArmaFit, Arma
 /// Attempts BFGS optimization of the ARMA concentrated log-likelihood.
 fn bfgs_optimize(data: &[f64], p: usize, init: &[f64]) -> Result<Vec<f64>, ArmaError> {
     let dim = init.len();
-    let cost = ArmaCost { data, p };
+    let q = init.len() - p;
+    let cost = ArmaCost::new(data, p, q);
     let armijo = ArmijoCondition::new(1e-4).map_err(|_| ArmaError::OptimizationFailed)?;
     let linesearch = BacktrackingLineSearch::new(armijo)
         .rho(0.2)
@@ -232,7 +263,8 @@ fn nelder_mead_optimize(data: &[f64], p: usize, dim: usize) -> Result<Vec<f64>, 
         vertex[i] = 0.5;
         simplex.push(vertex);
     }
-    let cost = ArmaCost { data, p };
+    let q = dim - p;
+    let cost = ArmaCost::new(data, p, q);
     let solver = NelderMead::new(simplex)
         .with_sd_tolerance(1e-8)
         .map_err(|_| ArmaError::OptimizationFailed)?;
@@ -252,10 +284,36 @@ fn nelder_mead_optimize(data: &[f64], p: usize, dim: usize) -> Result<Vec<f64>, 
     Ok(best)
 }
 
+/// Pre-allocated scratch buffers for the cost/gradient hot loop.
+struct CostScratch {
+    ar: Vec<f64>,
+    ma: Vec<f64>,
+    ss: StateSpace,
+}
+
 /// Cost function for argmin: negative concentrated log-likelihood.
+///
+/// Uses [`RefCell`]-wrapped scratch buffers to eliminate heap allocations
+/// during the BFGS optimization hot loop.
 struct ArmaCost<'a> {
     data: &'a [f64],
     p: usize,
+    scratch: RefCell<CostScratch>,
+}
+
+impl<'a> ArmaCost<'a> {
+    fn new(data: &'a [f64], p: usize, q: usize) -> Self {
+        let r = p.max(q + 1).max(1);
+        Self {
+            data,
+            p,
+            scratch: RefCell::new(CostScratch {
+                ar: vec![0.0; p],
+                ma: vec![0.0; q],
+                ss: StateSpace::new_zeroed(r),
+            }),
+        }
+    }
 }
 
 impl CostFunction for ArmaCost<'_> {
@@ -263,12 +321,19 @@ impl CostFunction for ArmaCost<'_> {
     type Output = f64;
 
     fn cost(&self, params: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
+        let mut scratch = self.scratch.borrow_mut();
         let (alpha, beta) = params.split_at(self.p);
-        let ar = params::unconstrained_to_coeffs(alpha);
-        let ma = params::unconstrained_to_coeffs(beta);
-        let ss = StateSpace::new(&ar, &ma);
+        let CostScratch { ar, ma, ss } = &mut *scratch;
+        params::unconstrained_to_coeffs_buf(alpha, ar);
+        params::unconstrained_to_coeffs_buf(beta, ma);
 
-        match kalman::kalman_concentrated_loglik(&ss, self.data) {
+        if ar.iter().chain(ma.iter()).any(|c| !c.is_finite()) {
+            return Ok(PENALTY_COST);
+        }
+
+        ss.update(ar, ma);
+
+        match kalman::kalman_concentrated_loglik(ss, self.data) {
             Ok(loglik) if loglik.is_finite() => Ok(-loglik),
             _ => Ok(PENALTY_COST),
         }
@@ -283,22 +348,26 @@ impl Gradient for ArmaCost<'_> {
         let dim = params.len();
         let f_center = self.cost(params)?;
         let mut grad = vec![0.0; dim];
+        let mut perturbed = params.clone();
+
         for i in 0..dim {
-            let h = FD_STEP;
-            let mut forward = params.clone();
-            forward[i] += h;
-            let mut backward = params.clone();
-            backward[i] -= h;
-            let f_plus = self.cost(&forward)?;
-            let f_minus = self.cost(&backward)?;
-            let plus_ok = f_plus < PENALTY_COST;
-            let minus_ok = f_minus < PENALTY_COST;
-            grad[i] = match (plus_ok, minus_ok) {
-                (true, true) => (f_plus - f_minus) / (2.0 * h),
-                (true, false) => (f_plus - f_center) / h,
-                (false, true) => (f_center - f_minus) / h,
-                (false, false) => 0.0,
-            };
+            perturbed[i] = params[i] + FD_STEP;
+            let f_plus = self.cost(&perturbed)?;
+            perturbed[i] = params[i]; // restore
+
+            if f_plus < PENALTY_COST {
+                grad[i] = (f_plus - f_center) / FD_STEP;
+            } else {
+                // Rare fallback: backward difference
+                perturbed[i] = params[i] - FD_STEP;
+                let f_minus = self.cost(&perturbed)?;
+                perturbed[i] = params[i]; // restore
+                grad[i] = if f_minus < PENALTY_COST {
+                    (f_center - f_minus) / FD_STEP
+                } else {
+                    0.0
+                };
+            }
         }
         Ok(grad)
     }
@@ -419,7 +488,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let normal = Normal::new(0.0, 1.0).unwrap();
         let data: Vec<f64> = (0..200).map(|_| normal.sample(&mut rng)).collect();
-        let cost = ArmaCost { data: &data, p: 1 };
+        let cost = ArmaCost::new(&data, 1, 1);
         let params = vec![0.0, 0.0]; // ARMA(1,1) at origin
         let grad = cost.gradient(&params).unwrap();
         assert_eq!(grad.len(), 2);

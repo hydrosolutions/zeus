@@ -66,6 +66,56 @@ impl StateSpace {
         Self { r, t, r_vec, rrt }
     }
 
+    /// Creates a zeroed state-space with pre-allocated arrays of the right size.
+    ///
+    /// Used to pre-allocate a `StateSpace` that will be filled by [`update()`](Self::update).
+    pub(crate) fn new_zeroed(r: usize) -> Self {
+        Self {
+            r,
+            t: Array2::zeros((r, r)),
+            r_vec: Array1::zeros(r),
+            rrt: Array2::zeros((r, r)),
+        }
+    }
+
+    /// Updates this state-space in place with new AR and MA coefficients.
+    ///
+    /// Reuses existing array allocations — zero heap allocations per call.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ar.len()` and `ma.len()` are inconsistent with the
+    /// pre-allocated state dimension `self.r`.
+    pub(crate) fn update(&mut self, ar: &[f64], ma: &[f64]) {
+        let p = ar.len();
+        let q = ma.len();
+        let r = self.r;
+        debug_assert_eq!(r, p.max(q + 1).max(1));
+
+        // Zero T, then fill
+        self.t.fill(0.0);
+        for (i, &ar_i) in ar.iter().enumerate() {
+            self.t[[i, 0]] = ar_i;
+        }
+        for i in 0..r.saturating_sub(1) {
+            self.t[[i, i + 1]] = 1.0;
+        }
+
+        // Zero r_vec, then fill
+        self.r_vec.fill(0.0);
+        self.r_vec[0] = 1.0;
+        for (j, &ma_j) in ma.iter().enumerate() {
+            self.r_vec[j + 1] = ma_j;
+        }
+
+        // Recompute rrt as outer product (element-wise, no insert_axis)
+        for i in 0..r {
+            for j in 0..r {
+                self.rrt[[i, j]] = self.r_vec[i] * self.r_vec[j];
+            }
+        }
+    }
+
     /// State dimension `r = max(p, q+1)`, minimum 1.
     pub(crate) fn r(&self) -> usize {
         self.r
@@ -236,5 +286,50 @@ mod tests {
     fn send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<StateSpace>();
+    }
+
+    #[test]
+    fn update_matches_new() {
+        let ar = &[0.5, -0.3];
+        let ma = &[0.4];
+        let fresh = StateSpace::new(ar, ma);
+        let mut reused = StateSpace::new_zeroed(fresh.r());
+        reused.update(ar, ma);
+        for i in 0..fresh.r() {
+            for j in 0..fresh.r() {
+                assert_abs_diff_eq!(fresh.t()[[i, j]], reused.t()[[i, j]], epsilon = 1e-12);
+                assert_abs_diff_eq!(fresh.rrt()[[i, j]], reused.rrt()[[i, j]], epsilon = 1e-12);
+            }
+            assert_abs_diff_eq!(fresh.r_vec()[i], reused.r_vec()[i], epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn update_multiple_times() {
+        let mut ss = StateSpace::new_zeroed(2);
+
+        // First update
+        ss.update(&[0.7], &[0.3]);
+        let fresh1 = StateSpace::new(&[0.7], &[0.3]);
+        assert_abs_diff_eq!(ss.t()[[0, 0]], fresh1.t()[[0, 0]], epsilon = 1e-12);
+
+        // Second update with different coefficients
+        ss.update(&[0.2], &[0.8]);
+        let fresh2 = StateSpace::new(&[0.2], &[0.8]);
+        for i in 0..2 {
+            for j in 0..2 {
+                assert_abs_diff_eq!(ss.t()[[i, j]], fresh2.t()[[i, j]], epsilon = 1e-12);
+                assert_abs_diff_eq!(ss.rrt()[[i, j]], fresh2.rrt()[[i, j]], epsilon = 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn new_zeroed_dimensions() {
+        let ss = StateSpace::new_zeroed(3);
+        assert_eq!(ss.r(), 3);
+        assert_eq!(ss.t().shape(), &[3, 3]);
+        assert_eq!(ss.r_vec().len(), 3);
+        assert_eq!(ss.rrt().shape(), &[3, 3]);
     }
 }
