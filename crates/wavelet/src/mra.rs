@@ -2,8 +2,7 @@
 
 use crate::error::WaveletError;
 use crate::filter::WaveletFilter;
-#[allow(unused_imports)]
-use crate::modwt::ModwtCoeffs;
+use crate::modwt::{ModwtCoeffs, ModwtConfig, imodwt, max_modwt_level, modwt};
 use crate::series::TimeSeries;
 
 /// Selects MRA decomposition levels based on the series length and
@@ -194,8 +193,7 @@ impl Mra {
     ///
     /// Each column corresponds to one component (details first, then smooth).
     pub fn to_matrix(&self) -> Vec<Vec<f64>> {
-        let _ = self;
-        todo!()
+        self.components().map(|c| c.to_vec()).collect()
     }
 }
 
@@ -208,8 +206,122 @@ impl Mra {
 /// | [`WaveletError::LevelTooHigh`] | requested levels exceed maximum |
 /// | [`WaveletError::MraFailed`] | numerical failure during analysis |
 pub fn mra(series: &TimeSeries, config: &MraConfig) -> Result<Mra, WaveletError> {
-    let _ = (series, config);
-    todo!()
+    let data = series.as_slice();
+    let n = data.len();
+    let filter = config.filter();
+
+    // Determine number of levels
+    let j = match config.n_levels() {
+        Some(levels) => levels,
+        None => {
+            let levels = select_levels(n, config.max_period_frac());
+            *levels.last().ok_or_else(|| {
+                WaveletError::MraFailed(
+                    "no valid decomposition levels for this series length".into(),
+                )
+            })?
+        }
+    };
+
+    // Validate level
+    let max_level = max_modwt_level(n, &filter);
+    if j > max_level {
+        return Err(WaveletError::LevelTooHigh {
+            requested: j,
+            max: max_level,
+            len: n,
+        });
+    }
+
+    // Forward MODWT
+    let modwt_config = ModwtConfig::new(filter, j);
+    let coeffs = modwt(series, &modwt_config)?;
+
+    // Extract detail components D[1..J] via iMODWT
+    let mut details = Vec::with_capacity(j);
+    for level in 0..j {
+        // Build coeffs with only this level's detail non-zero
+        let mut zero_details: Vec<Vec<f64>> = (0..j).map(|_| vec![0.0; n]).collect();
+        zero_details[level] = coeffs
+            .detail(level)
+            .ok_or_else(|| WaveletError::MraFailed(format!("missing detail level {}", level)))?
+            .to_vec();
+        let detail_coeffs = ModwtCoeffs::new(zero_details, vec![0.0; n], filter);
+        let component = imodwt(&detail_coeffs)?;
+        details.push(component);
+    }
+
+    // Extract smooth component S[J]
+    let smooth = if config.include_smooth() {
+        let zero_details: Vec<Vec<f64>> = (0..j).map(|_| vec![0.0; n]).collect();
+        let smooth_coeffs = ModwtCoeffs::new(zero_details, coeffs.smooth().to_vec(), filter);
+        imodwt(&smooth_coeffs)?
+    } else {
+        vec![]
+    };
+
+    // Compute periods
+    let mut periods = Vec::with_capacity(j + if config.include_smooth() { 1 } else { 0 });
+    for level in 1..=j {
+        // Detail j -> 2^j * sqrt(2) (geometric mean of band [2^j, 2^(j+1)])
+        periods.push(2.0_f64.powi(level as i32) * std::f64::consts::SQRT_2);
+    }
+    if config.include_smooth() {
+        // Smooth -> 2^(J+1)
+        periods.push(2.0_f64.powi((j + 1) as i32));
+    }
+
+    // Compute variance fractions
+    let data_var = variance(data);
+    let mut variance_fractions =
+        Vec::with_capacity(details.len() + if smooth.is_empty() { 0 } else { 1 });
+    for detail in &details {
+        variance_fractions.push(if data_var > 0.0 {
+            variance(detail) / data_var
+        } else {
+            0.0
+        });
+    }
+    if !smooth.is_empty() {
+        variance_fractions.push(if data_var > 0.0 {
+            variance(&smooth) / data_var
+        } else {
+            0.0
+        });
+    }
+
+    // Compute reconstruction error
+    let reconstruction_error = if config.include_smooth() {
+        let mut max_err = 0.0_f64;
+        for i in 0..n {
+            let sum: f64 = details.iter().map(|d| d[i]).sum::<f64>() + smooth[i];
+            let err = (data[i] - sum).abs();
+            if err > max_err {
+                max_err = err;
+            }
+        }
+        max_err
+    } else {
+        0.0
+    };
+
+    Ok(Mra::new(
+        details,
+        smooth,
+        periods,
+        variance_fractions,
+        reconstruction_error,
+    ))
+}
+
+/// Computes population variance (N denominator) of a data slice.
+fn variance(data: &[f64]) -> f64 {
+    let n = data.len() as f64;
+    if n <= 0.0 {
+        return 0.0;
+    }
+    let mean = data.iter().sum::<f64>() / n;
+    data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n
 }
 
 #[cfg(test)]
@@ -306,5 +418,191 @@ mod tests {
     fn mra_config_is_send_and_sync() {
         fn assert_impl<T: Send + Sync>() {}
         assert_impl::<MraConfig>();
+    }
+
+    #[test]
+    fn mra_additive_reconstruction() {
+        let n = 128;
+        let data: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.1).sin() + 0.5 * (i as f64 * 0.3).cos())
+            .collect();
+        let ts = TimeSeries::new(data.clone()).unwrap();
+        let config = MraConfig::new(WaveletFilter::La8).with_levels(3);
+        let result = mra(&ts, &config).unwrap();
+
+        assert!(
+            result.reconstruction_error() < 1e-6,
+            "reconstruction error too high: {}",
+            result.reconstruction_error()
+        );
+
+        // Verify components actually sum to original
+        for (i, &expected) in data.iter().enumerate() {
+            let sum: f64 = (0..result.n_detail_levels())
+                .map(|j| result.detail(j).unwrap()[i])
+                .sum::<f64>()
+                + result.smooth()[i];
+            assert!(
+                (expected - sum).abs() < 1e-6,
+                "additive reconstruction failed at index {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn mra_component_lengths() {
+        let n = 64;
+        let data: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::D4).with_levels(3);
+        let result = mra(&ts, &config).unwrap();
+
+        for level in 0..result.n_detail_levels() {
+            assert_eq!(result.detail(level).unwrap().len(), n);
+        }
+        assert_eq!(result.smooth().len(), n);
+    }
+
+    #[test]
+    fn mra_level_too_high() {
+        let ts = TimeSeries::new(vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let config = MraConfig::new(WaveletFilter::La8).with_levels(10);
+        let err = mra(&ts, &config).unwrap_err();
+        assert!(matches!(err, WaveletError::LevelTooHigh { .. }));
+    }
+
+    #[test]
+    fn mra_exclude_smooth() {
+        let n = 64;
+        let data: Vec<f64> = (0..n).map(|i| (i as f64 * 0.2).sin()).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::Haar)
+            .with_levels(3)
+            .with_include_smooth(false);
+        let result = mra(&ts, &config).unwrap();
+
+        assert!(result.smooth().is_empty());
+        assert_eq!(result.n_detail_levels(), 3);
+        // Periods should only have detail periods (no smooth period)
+        assert_eq!(result.periods().len(), 3);
+        assert_eq!(result.variance_fractions().len(), 3);
+    }
+
+    #[test]
+    fn mra_periods_monotonic() {
+        let n = 128;
+        let data: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::Haar).with_levels(4);
+        let result = mra(&ts, &config).unwrap();
+
+        let periods = result.periods();
+        assert!(!periods.is_empty());
+        // First period should be approximately 2*sqrt(2)
+        assert!(
+            (periods[0] - 2.0 * std::f64::consts::SQRT_2).abs() < 1e-10,
+            "first period: {} (expected {})",
+            periods[0],
+            2.0 * std::f64::consts::SQRT_2
+        );
+        // Periods should be strictly increasing
+        for i in 1..periods.len() {
+            assert!(
+                periods[i] > periods[i - 1],
+                "periods not monotonic at index {}: {} <= {}",
+                i,
+                periods[i],
+                periods[i - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn mra_constant_series() {
+        let n = 32;
+        let data = vec![42.0; n];
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::Haar).with_levels(3);
+        let result = mra(&ts, &config).unwrap();
+
+        // All variance fractions should be ~0 for constant input
+        for (i, &vf) in result.variance_fractions().iter().enumerate() {
+            assert!(
+                vf.abs() < 1e-10 || vf.is_nan(),
+                "variance fraction {} not ~0: {}",
+                i,
+                vf
+            );
+        }
+    }
+
+    #[test]
+    fn mra_variance_fractions_reasonable() {
+        let n = 256;
+        let data: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.05).sin() + 0.5 * (i as f64 * 0.2).cos())
+            .collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::La8).with_levels(4);
+        let result = mra(&ts, &config).unwrap();
+
+        let sum: f64 = result.variance_fractions().iter().sum();
+        assert!(
+            sum > 0.5 && sum < 2.0,
+            "variance fractions sum out of range: {}",
+            sum
+        );
+    }
+
+    #[test]
+    fn to_matrix_dimensions_with_smooth() {
+        let n = 64;
+        let data: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::Haar).with_levels(3);
+        let result = mra(&ts, &config).unwrap();
+
+        let matrix = result.to_matrix();
+        // 3 details + 1 smooth = 4 columns
+        assert_eq!(matrix.len(), 4);
+        for col in &matrix {
+            assert_eq!(col.len(), n);
+        }
+    }
+
+    #[test]
+    fn to_matrix_dimensions_without_smooth() {
+        let n = 64;
+        let data: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::Haar)
+            .with_levels(3)
+            .with_include_smooth(false);
+        let result = mra(&ts, &config).unwrap();
+
+        let matrix = result.to_matrix();
+        // 3 details, no smooth
+        assert_eq!(matrix.len(), 3);
+        for col in &matrix {
+            assert_eq!(col.len(), n);
+        }
+    }
+
+    #[test]
+    fn to_matrix_matches_components() {
+        let n = 64;
+        let data: Vec<f64> = (0..n).map(|i| (i as f64 * 0.15).sin()).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::D4).with_levels(2);
+        let result = mra(&ts, &config).unwrap();
+
+        let matrix = result.to_matrix();
+        let components: Vec<Vec<f64>> = result.components().map(|c| c.to_vec()).collect();
+
+        assert_eq!(matrix.len(), components.len());
+        for (i, (mat_col, comp)) in matrix.iter().zip(components.iter()).enumerate() {
+            assert_eq!(mat_col, comp, "matrix column {} doesn't match component", i);
+        }
     }
 }
