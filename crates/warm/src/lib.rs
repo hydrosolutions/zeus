@@ -27,7 +27,10 @@
 //! let pool = filter_warm_pool(&observed, &result, &FilterBounds::default())?;
 //! ```
 
+mod bootstrap;
 mod error;
+mod spectral;
+mod stats;
 mod warm;
 mod warm_filter;
 
