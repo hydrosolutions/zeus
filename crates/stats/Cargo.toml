@@ -1,0 +1,7 @@
+[package]
+name = "zeus-stats"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror = "2"
