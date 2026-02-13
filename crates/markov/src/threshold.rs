@@ -10,12 +10,11 @@ use zeus_stats::quantile_type7;
 
 /// Resolved precipitation thresholds for state classification.
 ///
-/// The wet threshold is a single scalar applied globally. The extreme
-/// thresholds are resolved per calendar month (1-indexed internally,
-/// stored as a 12-element array indexed 0..12).
+/// Both the wet and extreme thresholds are resolved per calendar month
+/// (1-indexed internally, stored as 12-element arrays indexed 0..11).
 #[derive(Clone, Debug)]
 pub struct StateThresholds {
-    wet_threshold: f64,
+    wet_thresholds: [f64; 12],
     extreme_thresholds: [f64; 12],
 }
 
@@ -58,16 +57,39 @@ impl StateThresholds {
         }
         config.validate()?;
 
-        // --- Wet threshold ---
-        let wet_threshold = match config.wet_spec() {
-            ThresholdSpec::Fixed(v) => v,
+        // --- Wet thresholds (per month) ---
+        let wet_thresholds = match config.wet_spec() {
+            ThresholdSpec::Fixed(v) => [v; 12],
             ThresholdSpec::Quantile(q) => {
-                let mut sorted: Vec<f64> = precip.to_vec();
-                sorted.sort_by(|a, b| {
+                // Global fallback: quantile over ALL precip values (including zeros).
+                let mut global_all: Vec<f64> = precip.to_vec();
+                global_all.sort_by(|a, b| {
                     a.partial_cmp(b)
                         .expect("non-finite values excluded by validation")
                 });
-                quantile_type7(&sorted, q)
+                let global_fallback = quantile_type7(&global_all, q);
+
+                let mut thresholds = [0.0_f64; 12];
+                for m in 0..12u8 {
+                    let month_1 = m + 1;
+                    let mut month_all: Vec<f64> = precip
+                        .iter()
+                        .zip(months.iter())
+                        .filter(|&(_, &mo)| mo == month_1)
+                        .map(|(&p, _)| p)
+                        .collect();
+
+                    if month_all.is_empty() {
+                        thresholds[m as usize] = global_fallback;
+                    } else {
+                        month_all.sort_by(|a, b| {
+                            a.partial_cmp(b)
+                                .expect("non-finite values excluded by validation")
+                        });
+                        thresholds[m as usize] = quantile_type7(&month_all, q);
+                    }
+                }
+                thresholds
             }
         };
 
@@ -122,7 +144,7 @@ impl StateThresholds {
         };
 
         Ok(Self {
-            wet_threshold,
+            wet_thresholds,
             extreme_thresholds,
         })
     }
@@ -135,7 +157,7 @@ impl StateThresholds {
     /// (hot path).
     #[inline]
     pub fn classify(&self, precip: f64, month: u8) -> PrecipState {
-        if precip <= self.wet_threshold {
+        if precip <= self.wet_thresholds[month as usize - 1] {
             PrecipState::Dry
         } else if precip > self.extreme_thresholds[month as usize - 1] {
             PrecipState::Extreme
@@ -174,9 +196,14 @@ impl StateThresholds {
             .collect())
     }
 
-    /// Returns the global wet/dry threshold.
-    pub fn wet_threshold(&self) -> f64 {
-        self.wet_threshold
+    /// Returns the wet/dry threshold for a 1-indexed month.
+    pub fn wet_threshold(&self, month: u8) -> f64 {
+        self.wet_thresholds[month as usize - 1]
+    }
+
+    /// Returns all 12 wet thresholds (indexed 0 = January, ..., 11 = December).
+    pub fn wet_thresholds(&self) -> &[f64; 12] {
+        &self.wet_thresholds
     }
 
     /// Returns the extreme threshold for a 1-indexed month.
@@ -216,7 +243,9 @@ mod tests {
         let config = fixed_config(0.3, 8.0);
 
         let st = StateThresholds::from_baseline(&precip, &months, &config).unwrap();
-        assert!((st.wet_threshold() - 0.3).abs() < f64::EPSILON);
+        for m in 1..=12u8 {
+            assert!((st.wet_threshold(m) - 0.3).abs() < f64::EPSILON);
+        }
         for m in 1..=12u8 {
             assert!((st.extreme_threshold(m) - 8.0).abs() < f64::EPSILON);
         }
@@ -231,15 +260,21 @@ mod tests {
         let precip = vec![0.0, 1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 5.0, 6.0, 7.0];
         let months = vec![1u8, 1, 1, 1, 1, 2, 2, 2, 2, 2];
 
-        // wet_q = 0.5 over ALL values (including zeros).
-        // sorted all: [0,0,0,1,2,3,4,5,6,7] → median = quantile(0.5)
-        // h = 9*0.5 = 4.5 → lo=4, hi=5 → 2 + 0.5*(3-2) = 2.5
+        // wet_q = 0.5 over ALL values (including zeros), now per-month.
         let config = quantile_config(0.5, 0.8);
         let st = StateThresholds::from_baseline(&precip, &months, &config).unwrap();
+        // Wet threshold is now per-month. All precip per month (including zeros):
+        // Month 1: [0.0, 1.0, 2.0, 3.0, 4.0], q=0.5 → h=4*0.5=2.0 → sorted[2] = 2.0
         assert!(
-            (st.wet_threshold() - 2.5).abs() < 1e-10,
-            "wet_threshold: expected 2.5, got {}",
-            st.wet_threshold()
+            (st.wet_threshold(1) - 2.0).abs() < 1e-10,
+            "wet_threshold month 1: expected 2.0, got {}",
+            st.wet_threshold(1)
+        );
+        // Month 2: [0.0, 0.0, 5.0, 6.0, 7.0], q=0.5 → h=4*0.5=2.0 → sorted[2] = 5.0
+        assert!(
+            (st.wet_threshold(2) - 5.0).abs() < 1e-10,
+            "wet_threshold month 2: expected 5.0, got {}",
+            st.wet_threshold(2)
         );
 
         // Extreme quantile is computed over positive-precip per month (NOT precip > wet_threshold).

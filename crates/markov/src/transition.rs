@@ -16,7 +16,7 @@ pub struct TransitionMatrix {
 
 impl TransitionMatrix {
     /// Constructs a transition matrix directly from a 3x3 array.
-    pub(crate) fn from_probs(probs: [[f64; 3]; 3]) -> Self {
+    pub fn from_probs(probs: [[f64; 3]; 3]) -> Self {
         Self { probs }
     }
 
@@ -95,7 +95,7 @@ pub struct MonthlyTransitions {
 
 impl MonthlyTransitions {
     /// Constructs monthly transitions from an array of 12 matrices.
-    pub(crate) fn from_matrices(matrices: [TransitionMatrix; 12]) -> Self {
+    pub fn from_matrices(matrices: [TransitionMatrix; 12]) -> Self {
         Self { matrices }
     }
 
@@ -159,6 +159,7 @@ pub fn estimate_monthly_transitions(
     months: &[u8],
     thresholds: &StateThresholds,
     config: &MarkovConfig,
+    water_years: Option<&[i32]>,
 ) -> Result<MonthlyTransitions, MarkovError> {
     // Validate inputs.
     if precip.is_empty() {
@@ -168,6 +169,14 @@ pub fn estimate_monthly_transitions(
         return Err(MarkovError::LengthMismatch {
             precip_len: precip.len(),
             months_len: months.len(),
+        });
+    }
+    if let Some(wy) = water_years
+        && wy.len() != precip.len()
+    {
+        return Err(MarkovError::WaterYearsLengthMismatch {
+            precip_len: precip.len(),
+            water_years_len: wy.len(),
         });
     }
     if precip.len() < 2 {
@@ -193,6 +202,11 @@ pub fn estimate_monthly_transitions(
         let mut counts = [[0.0_f64; 3]; 3];
         for t in 1..states.len() {
             if months[t] == m {
+                if let Some(wy) = water_years
+                    && wy[t - 1] != wy[t]
+                {
+                    continue;
+                }
                 counts[states[t - 1].as_index()][states[t].as_index()] += 1.0;
             }
         }
@@ -419,7 +433,8 @@ mod tests {
         let thresholds = test_thresholds(0.3, 8.0);
         let config = MarkovConfig::new();
 
-        let mt = estimate_monthly_transitions(&precip, &months, &thresholds, &config).unwrap();
+        let mt =
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config, None).unwrap();
 
         // Every month should have high p(Dry->Dry).
         for m in 1..=12u8 {
@@ -441,7 +456,8 @@ mod tests {
         let thresholds = test_thresholds(0.3, 8.0);
         let config = MarkovConfig::new(); // alpha=1.0, spell factors=1.0
 
-        let mt = estimate_monthly_transitions(&precip, &months, &thresholds, &config).unwrap();
+        let mt =
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config, None).unwrap();
 
         let tm = mt.for_month(1);
 
@@ -487,7 +503,8 @@ mod tests {
         let thresholds = test_thresholds(0.3, 8.0);
         let config = MarkovConfig::new();
 
-        let mt = estimate_monthly_transitions(&precip, &months, &thresholds, &config).unwrap();
+        let mt =
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config, None).unwrap();
 
         // Month 2 should have no transitions, so all rows = [1, 0, 0].
         let tm = mt.for_month(2);
@@ -522,14 +539,15 @@ mod tests {
         // First estimate without spell factors.
         let config_no_spell = MarkovConfig::new();
         let mt_no =
-            estimate_monthly_transitions(&precip, &months, &thresholds, &config_no_spell).unwrap();
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config_no_spell, None)
+                .unwrap();
 
         // Now estimate with dry_factor = 2.0 for January.
         let mut dry_factors = [1.0; 12];
         dry_factors[0] = 2.0; // January
         let config_dry = MarkovConfig::new().with_dry_spell_factors(dry_factors);
         let mt_dry =
-            estimate_monthly_transitions(&precip, &months, &thresholds, &config_dry).unwrap();
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config_dry, None).unwrap();
 
         // With dry_factor > 1, the probability of leaving Dry (D->W, D->E) should decrease,
         // so p(D->D) should increase relative to no spell factors.
@@ -545,7 +563,7 @@ mod tests {
         wet_factors[0] = 2.0; // January
         let config_wet = MarkovConfig::new().with_wet_spell_factors(wet_factors);
         let mt_wet =
-            estimate_monthly_transitions(&precip, &months, &thresholds, &config_wet).unwrap();
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config_wet, None).unwrap();
 
         // With wet_factor > 1, the probability of leaving Wet to Dry (W->D) should decrease,
         // so p(W->W) should increase relative to no spell factors.
@@ -566,7 +584,8 @@ mod tests {
         let thresholds = test_thresholds(0.3, 8.0);
         let config = MarkovConfig::new();
 
-        let mt = estimate_monthly_transitions(&precip, &months, &thresholds, &config).unwrap();
+        let mt =
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config, None).unwrap();
 
         for m in 1..=12u8 {
             let tm = mt.for_month(m);
@@ -586,7 +605,7 @@ mod tests {
     fn estimate_empty_error() {
         let thresholds = test_thresholds(0.3, 8.0);
         let config = MarkovConfig::new();
-        let result = estimate_monthly_transitions(&[], &[], &thresholds, &config);
+        let result = estimate_monthly_transitions(&[], &[], &thresholds, &config, None);
         assert!(matches!(result, Err(MarkovError::EmptyData)));
     }
 
@@ -595,10 +614,72 @@ mod tests {
     fn estimate_insufficient_data() {
         let thresholds = test_thresholds(0.3, 8.0);
         let config = MarkovConfig::new();
-        let result = estimate_monthly_transitions(&[0.0], &[1], &thresholds, &config);
+        let result = estimate_monthly_transitions(&[0.0], &[1], &thresholds, &config, None);
         assert!(matches!(
             result,
             Err(MarkovError::InsufficientData { n: 1, min: 2 })
+        ));
+    }
+
+    // 20. estimate_water_years_filters_boundary
+    #[test]
+    fn estimate_water_years_filters_boundary() {
+        // Sequence: D, D, W, W where WY changes at the boundary between pos 1 and 2.
+        // water_years = [2000, 2000, 2001, 2001]
+        // Without filtering: transitions at pos 1 (D→D), pos 2 (D→W), pos 3 (W→W)
+        // With filtering: skip pos 2 (wy[1]=2000 != wy[2]=2001) → only D→D and W→W
+        let precip = vec![0.0, 0.0, 1.0, 1.0];
+        let months = vec![1u8, 1, 1, 1];
+        let thresholds = test_thresholds(0.3, 8.0);
+        let config = MarkovConfig::new();
+        let water_years = vec![2000i32, 2000, 2001, 2001];
+
+        let mt_filtered = estimate_monthly_transitions(
+            &precip,
+            &months,
+            &thresholds,
+            &config,
+            Some(&water_years),
+        )
+        .unwrap();
+
+        let mt_unfiltered =
+            estimate_monthly_transitions(&precip, &months, &thresholds, &config, None).unwrap();
+
+        // With filtering, D→W transition at the year boundary is excluded.
+        // Unfiltered: D→D=1, D→W=1; Filtered: D→D=1, D→W=0
+        // So filtered p(D→D) > unfiltered p(D→D)
+        let p_dd_filtered = mt_filtered
+            .for_month(1)
+            .prob(PrecipState::Dry, PrecipState::Dry);
+        let p_dd_unfiltered = mt_unfiltered
+            .for_month(1)
+            .prob(PrecipState::Dry, PrecipState::Dry);
+        assert!(
+            p_dd_filtered > p_dd_unfiltered,
+            "filtered p(D→D) = {p_dd_filtered} should be > unfiltered {p_dd_unfiltered}"
+        );
+    }
+
+    // 21. estimate_water_years_length_mismatch
+    #[test]
+    fn estimate_water_years_length_mismatch() {
+        let precip = vec![0.0, 0.0, 1.0];
+        let months = vec![1u8, 1, 1];
+        let thresholds = test_thresholds(0.3, 8.0);
+        let config = MarkovConfig::new();
+        let water_years = vec![2000i32, 2000]; // wrong length
+
+        let result = estimate_monthly_transitions(
+            &precip,
+            &months,
+            &thresholds,
+            &config,
+            Some(&water_years),
+        );
+        assert!(matches!(
+            result,
+            Err(MarkovError::WaterYearsLengthMismatch { .. })
         ));
     }
 }

@@ -60,6 +60,17 @@ pub enum MarkovError {
         /// Actual buffer length.
         got: usize,
     },
+
+    /// Returned when water_years slice differs in length from precip.
+    #[error(
+        "water_years length mismatch: precip has {precip_len} elements, water_years has {water_years_len}"
+    )]
+    WaterYearsLengthMismatch {
+        /// Length of the precipitation slice.
+        precip_len: usize,
+        /// Length of the water_years slice.
+        water_years_len: usize,
+    },
 }
 
 #[cfg(test)]
@@ -147,5 +158,17 @@ mod tests {
     fn error_is_send_and_sync() {
         fn assert_impl<T: Send + Sync>() {}
         assert_impl::<MarkovError>();
+    }
+
+    #[test]
+    fn error_water_years_length_mismatch() {
+        let e = MarkovError::WaterYearsLengthMismatch {
+            precip_len: 100,
+            water_years_len: 99,
+        };
+        assert_eq!(
+            e.to_string(),
+            "water_years length mismatch: precip has 100 elements, water_years has 99"
+        );
     }
 }

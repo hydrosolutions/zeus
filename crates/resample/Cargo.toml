@@ -4,4 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+zeus-knn = { path = "../knn" }
+zeus-markov = { path = "../markov" }
+zeus-calendar = { path = "../calendar" }
+zeus-stats = { path = "../stats" }
+rand = "0.9"
 thiserror = "2"
+
+[dev-dependencies]
+approx = "0.5"
+rand = "0.9"
+rand_distr = "0.5"

@@ -49,7 +49,7 @@ Observed Climate Data
 | **zeus-warm** | Done | WARM pipeline — wavelet-ARMA simulation with adaptive pool filtering |
 | **zeus-markov** | Done | Three-state precipitation Markov chain with monthly transitions |
 | **zeus-knn** | Done | k-nearest-neighbor sampling (uniform, rank, distance-weighted) |
-| zeus-resample | Scaffold | Daily disaggregation via Markov-conditioned KNN |
+| **zeus-resample** | Done | Daily disaggregation via Markov-conditioned KNN |
 | **zeus-quantile-map** | Done | Gamma-to-Gamma parametric quantile mapping for precipitation adjustment |
 | **zeus-perturb** | Done | Climate perturbation pipeline — temperature scaling, occurrence adjustment, safety rails |
 | **zeus-stats** | Done | Centralised statistics — mean, variance, sd, quantile, median, robust scale, correlation |

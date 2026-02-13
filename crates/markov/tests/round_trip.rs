@@ -40,7 +40,7 @@ fn run_pipeline(
 ) -> (StateThresholds, MonthlyTransitions) {
     let thresholds =
         StateThresholds::from_baseline(precip, months, config).expect("from_baseline failed");
-    let transitions = estimate_monthly_transitions(precip, months, &thresholds, config)
+    let transitions = estimate_monthly_transitions(precip, months, &thresholds, config, None)
         .expect("estimate_monthly_transitions failed");
     (thresholds, transitions)
 }
@@ -201,7 +201,7 @@ fn conditional_dataset_increases_dry_persistence() {
     let thresholds_dry =
         StateThresholds::from_baseline(&dry_precip, &dry_months, &config).expect("dry baseline");
     let transitions_dry =
-        estimate_monthly_transitions(&dry_precip, &dry_months, &thresholds_dry, &config)
+        estimate_monthly_transitions(&dry_precip, &dry_months, &thresholds_dry, &config, None)
             .expect("dry transitions");
 
     // Compare p00 (Dry -> Dry) for January (month = 1).
