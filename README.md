@@ -56,7 +56,7 @@ Observed Climate Data
 | **zeus-calendar** | Done | 365-day no-leap calendar, water-year assignment |
 | zeus-pet | Scaffold | Hargreaves potential evapotranspiration |
 | zeus-evaluate | Scaffold | Simulation vs. observation diagnostics |
-| zeus-io | Scaffold | NetCDF / CSV I/O |
+| **zeus-io** | Done | NetCDF reader and Parquet writer for climate data |
 
 ## Build & Test
 
