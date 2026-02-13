@@ -46,7 +46,7 @@ pub(crate) mod transform;
 pub use config::{FitMethod, QmConfig};
 pub use error::QuantileMapError;
 pub use factors::ScenarioFactors;
-pub use fit::BaselineFit;
+pub use fit::{BaselineFit, fit_monthly};
 pub use gamma::GammaParams;
 pub use result::QmResult;
 

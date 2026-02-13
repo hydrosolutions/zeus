@@ -51,6 +51,7 @@ Observed Climate Data
 | **zeus-knn** | Done | k-nearest-neighbor sampling (uniform, rank, distance-weighted) |
 | zeus-resample | Scaffold | Daily disaggregation via Markov-conditioned KNN |
 | **zeus-quantile-map** | Done | Gamma-to-Gamma parametric quantile mapping for precipitation adjustment |
+| **zeus-perturb** | Done | Climate perturbation pipeline — temperature scaling, occurrence adjustment, safety rails |
 | **zeus-stats** | Done | Centralised statistics — mean, variance, sd, quantile, median, robust scale, correlation |
 | **zeus-calendar** | Done | 365-day no-leap calendar, water-year assignment |
 | zeus-pet | Scaffold | Hargreaves potential evapotranspiration |
