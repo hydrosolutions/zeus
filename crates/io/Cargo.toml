@@ -4,4 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+arrow = { version = "57", default-features = false }
+chrono = { version = "0.4", default-features = false }
+netcdf = { version = "0.12", default-features = false, features = ["static"] }
+parquet = { version = "57", default-features = false, features = ["arrow", "snap", "zstd"] }
 thiserror = "2"
+zeus-calendar = { path = "../calendar" }
+
+[dev-dependencies]
+tempfile = "3"
