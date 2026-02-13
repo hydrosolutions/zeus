@@ -52,7 +52,7 @@ Observed Climate Data
 | zeus-resample | Scaffold | Daily disaggregation via Markov-conditioned KNN |
 | **zeus-quantile-map** | Done | Gamma-to-Gamma parametric quantile mapping for precipitation adjustment |
 | zeus-stats | Scaffold | Skewness, kurtosis, spell lengths, tail-mass metrics |
-| zeus-calendar | Scaffold | 365-day no-leap calendar, water-year assignment |
+| **zeus-calendar** | Done | 365-day no-leap calendar, water-year assignment |
 | zeus-pet | Scaffold | Hargreaves potential evapotranspiration |
 | zeus-evaluate | Scaffold | Simulation vs. observation diagnostics |
 | zeus-io | Scaffold | NetCDF / CSV I/O |
