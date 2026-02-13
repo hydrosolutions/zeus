@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 zeus-arma = { path = "../arma" }
+zeus-stats = { path = "../stats" }
 zeus-wavelet = { path = "../wavelet" }
 thiserror = "2"
 rand = "0.9"

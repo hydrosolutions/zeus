@@ -6,6 +6,7 @@
 use crate::config::{MarkovConfig, ThresholdSpec};
 use crate::error::MarkovError;
 use crate::state::PrecipState;
+use zeus_stats::quantile_type7;
 
 /// Resolved precipitation thresholds for state classification.
 ///
@@ -187,25 +188,6 @@ impl StateThresholds {
     pub fn extreme_thresholds(&self) -> &[f64; 12] {
         &self.extreme_thresholds
     }
-}
-
-/// R's default quantile algorithm (type = 7).
-///
-/// **Expects pre-sorted input** (caller's responsibility).
-///
-/// # Panics
-///
-/// Panics if `sorted` is empty.
-fn quantile_type7(sorted: &[f64], p: f64) -> f64 {
-    assert!(
-        !sorted.is_empty(),
-        "quantile_type7: input must not be empty"
-    );
-    let n = sorted.len();
-    let h = (n - 1) as f64 * p;
-    let lo = h.floor() as usize;
-    let hi = (lo + 1).min(n - 1);
-    sorted[lo] + (h - h.floor()) * (sorted[hi] - sorted[lo])
 }
 
 #[cfg(test)]

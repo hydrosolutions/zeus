@@ -7,7 +7,7 @@ use zeus_wavelet::{MraConfig, TimeSeries, mra};
 
 use crate::bootstrap::{block_bootstrap, is_arma_viable};
 use crate::error::WarmError;
-use crate::stats::{mean, sd};
+use zeus_stats::{mean, sd};
 
 /// Configuration for a WARM simulation.
 ///

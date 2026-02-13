@@ -314,7 +314,7 @@ impl FilteredPool {
 fn filter_mean(obs_mean: f64, sims: &[Vec<f64>], tol: f64) -> Vec<bool> {
     sims.iter()
         .map(|sim| {
-            let sim_mean = crate::stats::mean(sim);
+            let sim_mean = zeus_stats::mean(sim);
             if obs_mean.abs() < 1e-10 {
                 (sim_mean - obs_mean).abs() <= tol
             } else {
@@ -328,7 +328,7 @@ fn filter_mean(obs_mean: f64, sims: &[Vec<f64>], tol: f64) -> Vec<bool> {
 fn filter_sd(obs_sd: f64, sims: &[Vec<f64>], tol: f64) -> Vec<bool> {
     sims.iter()
         .map(|sim| {
-            let sim_sd = crate::stats::sd(sim);
+            let sim_sd = zeus_stats::sd(sim);
             if obs_sd < 1e-10 {
                 sim_sd < 1e-10
             } else {
@@ -424,7 +424,7 @@ fn compute_spectral_metrics(
 
 /// Computes relative mean difference for sorting.
 fn mean_rel_diff(obs_mean: f64, sim: &[f64]) -> f64 {
-    let sim_mean = crate::stats::mean(sim);
+    let sim_mean = zeus_stats::mean(sim);
     if obs_mean.abs() < 1e-10 {
         (sim_mean - obs_mean).abs()
     } else {
@@ -506,13 +506,13 @@ pub fn filter_warm_pool(
     }
 
     let n_sim = sims.len();
-    let obs_mean = crate::stats::mean(observed);
-    let obs_sd = crate::stats::sd(observed);
+    let obs_mean = zeus_stats::mean(observed);
+    let obs_sd = zeus_stats::sd(observed);
 
     // Compute observed quantiles for tail filters
     let mut sorted_obs = observed.to_vec();
     sorted_obs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let denom = crate::stats::robust_scale(observed);
+    let denom = zeus_stats::robust_scale(observed);
 
     // Mutable bounds for relaxation
     let mut cur_mean_tol = bounds.mean_tol();
@@ -578,8 +578,8 @@ pub fn filter_warm_pool(
     };
 
     // --- Adaptive relaxation loop ---
-    let mut thr_low = crate::stats::quantile_type7(&sorted_obs, cur_tail_low_p);
-    let mut thr_high = crate::stats::quantile_type7(&sorted_obs, cur_tail_high_p);
+    let mut thr_low = zeus_stats::quantile_type7(&sorted_obs, cur_tail_low_p);
+    let mut thr_high = zeus_stats::quantile_type7(&sorted_obs, cur_tail_high_p);
 
     for _iter in 0..MAX_RELAXATION_ITER {
         let pass_mean = filter_mean(obs_mean, sims, cur_mean_tol);
@@ -691,7 +691,7 @@ pub fn filter_warm_pool(
                     let new_p = (cur_tail_low_p + TAIL_P_STEP).min(TAIL_P_FLOOR);
                     if (new_p - cur_tail_low_p).abs() > 1e-15 {
                         cur_tail_low_p = new_p;
-                        thr_low = crate::stats::quantile_type7(&sorted_obs, cur_tail_low_p);
+                        thr_low = zeus_stats::quantile_type7(&sorted_obs, cur_tail_low_p);
                         changed = true;
                     }
                 }
@@ -707,7 +707,7 @@ pub fn filter_warm_pool(
                     let new_p = (cur_tail_high_p - TAIL_P_STEP).max(TAIL_P_FLOOR);
                     if (cur_tail_high_p - new_p).abs() > 1e-15 {
                         cur_tail_high_p = new_p;
-                        thr_high = crate::stats::quantile_type7(&sorted_obs, cur_tail_high_p);
+                        thr_high = zeus_stats::quantile_type7(&sorted_obs, cur_tail_high_p);
                         changed = true;
                     }
                 }

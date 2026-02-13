@@ -83,14 +83,9 @@ pub(crate) fn fit_gamma_mme(values: &[f64]) -> Option<GammaParams> {
         return None;
     }
 
-    let mean = values.iter().copied().sum::<f64>() / n as f64;
+    let mean = zeus_stats::mean(values);
 
-    let variance = values
-        .iter()
-        .copied()
-        .map(|x| (x - mean).powi(2))
-        .sum::<f64>()
-        / (n - 1) as f64;
+    let variance = zeus_stats::variance(values);
 
     if count_unique(values) < 3 {
         return None;
@@ -124,7 +119,7 @@ fn count_unique(values: &[f64]) -> usize {
 /// For each calendar month (1..=12), collects wet-day values that exceed
 /// `config.intensity_threshold()`, then fits a Gamma distribution via
 /// method-of-moments if enough events are present.
-pub(crate) fn fit_monthly(precip: &[f64], month: &[u8], config: &QmConfig) -> BaselineFit {
+pub fn fit_monthly(precip: &[f64], month: &[u8], config: &QmConfig) -> BaselineFit {
     let mut params: [Option<GammaParams>; 12] = [None; 12];
     let mut skipped_months = Vec::new();
     let mut n_failed_fits = 0usize;

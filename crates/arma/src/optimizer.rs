@@ -173,7 +173,7 @@ pub(crate) fn fit_arma(p: usize, q: usize, data: &[f64]) -> Result<ArmaFit, Arma
 
     // 2. Center — subtract sample mean
     let n = data.len() as f64;
-    let mean = data.iter().sum::<f64>() / n;
+    let mean = zeus_stats::mean(data);
     let centered: Vec<f64> = data.iter().map(|x| x - mean).collect();
 
     // 3. ARMA(0,0) fast path — no optimization needed
