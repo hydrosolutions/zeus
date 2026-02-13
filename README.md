@@ -50,7 +50,7 @@ Observed Climate Data
 | **zeus-markov** | Done | Three-state precipitation Markov chain with monthly transitions |
 | **zeus-knn** | Done | k-nearest-neighbor sampling (uniform, rank, distance-weighted) |
 | zeus-resample | Scaffold | Daily disaggregation via Markov-conditioned KNN |
-| zeus-quantile-map | Scaffold | Gamma quantile-mapping bias correction |
+| **zeus-quantile-map** | Done | Gamma-to-Gamma parametric quantile mapping for precipitation adjustment |
 | zeus-stats | Scaffold | Skewness, kurtosis, spell lengths, tail-mass metrics |
 | zeus-calendar | Scaffold | 365-day no-leap calendar, water-year assignment |
 | zeus-pet | Scaffold | Hargreaves potential evapotranspiration |
