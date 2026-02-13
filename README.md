@@ -48,7 +48,7 @@ Observed Climate Data
 | **zeus-wavelet** | Done | MODWT/MRA decomposition, Morlet CWT, significance testing |
 | **zeus-warm** | Done | WARM pipeline — wavelet-ARMA simulation with adaptive pool filtering |
 | **zeus-markov** | Done | Three-state precipitation Markov chain with monthly transitions |
-| zeus-knn | Scaffold | k-nearest-neighbor sampling (uniform, rank, distance-weighted) |
+| **zeus-knn** | Done | k-nearest-neighbor sampling (uniform, rank, distance-weighted) |
 | zeus-resample | Scaffold | Daily disaggregation via Markov-conditioned KNN |
 | zeus-quantile-map | Scaffold | Gamma quantile-mapping bias correction |
 | zeus-stats | Scaffold | Skewness, kurtosis, spell lengths, tail-mass metrics |
