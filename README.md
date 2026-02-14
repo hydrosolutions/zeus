@@ -43,19 +43,22 @@ Observed Climate Data (NetCDF)
 ## Usage
 
 ```sh
-# Run the full generation pipeline
-zeus -c config.toml generate
+# Generate synthetic weather from observed data
+zeus generate -c config.toml -s 42
 
-# Override paths and seed via CLI flags
-zeus -c config.toml -i data/obs.nc -o output/syn.parquet -s 42 generate
+# Apply climate perturbations
+zeus perturb -i output/syn.parquet -o output/future.parquet --temp-delta 2.0
+
+# Evaluate synthetic output against observations
+zeus evaluate -c config.toml --synthetic output/syn.parquet
 
 # Increase verbosity (-v info, -vv debug, -vvv trace)
-zeus -vv -c config.toml generate
+zeus -vv generate -c config.toml
 ```
 
-The generator reads observed climate data from NetCDF, runs the WARM simulation and daily resampling pipeline, applies optional climate perturbations, writes synthetic weather to Parquet, and produces evaluation diagnostics as a JSON sidecar file.
+The generator reads observed climate data from NetCDF, runs the WARM simulation and daily resampling pipeline, and writes synthetic weather to Parquet with inline evaluation diagnostics. Climate perturbations are applied separately via `zeus perturb`, enabling grid sweeps over hundreds of scenarios without re-running the expensive generation step.
 
-Configuration is driven by a TOML file with sections for `[io]`, `[warm]`, `[filter]`, `[resample]`, `[markov]`, `[perturb]` (optional), and `[evaluate]`. All sections have sensible defaults — a minimal config only needs input/output paths:
+Configuration is driven by a TOML file with sections for `[io]`, `[warm]`, `[filter]`, `[resample]`, `[markov]`, and `[evaluate]`. All sections have sensible defaults — a minimal config only needs input/output paths:
 
 ```toml
 seed = 42

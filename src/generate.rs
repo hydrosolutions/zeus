@@ -7,17 +7,30 @@ use tracing::info;
 
 use zeus_calendar::{NoLeapDate, noleap_sequence};
 use zeus_evaluate::{MultiSiteSynthetic, evaluate};
-use zeus_io::{SyntheticWeather, read_netcdf, write_parquet};
-use zeus_perturb::apply_perturbations;
+use zeus_io::{OwnedSyntheticWeather, SyntheticWeather, read_netcdf, write_parquet};
 use zeus_resample::{ObsData, resample_dates};
 use zeus_warm::{filter_warm_pool, simulate_warm};
 
-use crate::cli::Cli;
+use crate::cli::GenerateArgs;
 use crate::config::ZeusConfig;
 use crate::convert;
 
 /// Run the full generation pipeline.
-pub fn run(_cli: &Cli, config: &ZeusConfig) -> Result<()> {
+pub fn run(args: GenerateArgs) -> Result<()> {
+    let toml_str = std::fs::read_to_string(&args.config)
+        .with_context(|| format!("failed to read config file: {}", args.config.display()))?;
+    let mut config: ZeusConfig =
+        toml::from_str(&toml_str).context("failed to parse TOML config")?;
+
+    // CLI overrides
+    if let Some(ref output) = args.output {
+        config.io.output = Some(output.clone());
+    }
+    if let Some(seed) = args.seed {
+        config.seed = Some(seed);
+    }
+    let config = config;
+
     // Step 1: Resolve paths
     let input =
         config.io.input.as_ref().ok_or_else(|| {
@@ -53,7 +66,7 @@ pub fn run(_cli: &Cli, config: &ZeusConfig) -> Result<()> {
     );
 
     // Per-site owned synthetic data accumulator
-    let mut site_synthetics: BTreeMap<String, Vec<OwnedSynthetic>> = BTreeMap::new();
+    let mut site_synthetics: BTreeMap<String, Vec<OwnedSyntheticWeather>> = BTreeMap::new();
 
     // Step 5: For each site
     for (site_key, obs) in multi_site.iter() {
@@ -125,7 +138,7 @@ pub fn run(_cli: &Cli, config: &ZeusConfig) -> Result<()> {
                 .collect();
             let syn_days_of_year: Vec<u16> = syn_dates.iter().map(|d| d.doy().get()).collect();
 
-            site_reals.push(OwnedSynthetic {
+            site_reals.push(OwnedSyntheticWeather {
                 precip: syn_precip,
                 temp_max: syn_tmax,
                 temp_min: syn_tmin,
@@ -134,53 +147,6 @@ pub fn run(_cli: &Cli, config: &ZeusConfig) -> Result<()> {
                 days_of_year: syn_days_of_year,
                 realisation: real_idx as u32,
             });
-        }
-
-        // Step 6: Optional perturbations
-        if let Some(ref perturb_toml) = config.perturb {
-            let n_years = config.warm.n_years;
-            let perturb_cfg = convert::build_perturb_config(perturb_toml, n_years, config.seed)?;
-
-            for owned in &mut site_reals {
-                // Compute mean temp
-                let temp_mean: Vec<f64> = match (&owned.temp_max, &owned.temp_min) {
-                    (Some(tmax), Some(tmin)) => tmax
-                        .iter()
-                        .zip(tmin.iter())
-                        .map(|(a, b)| (a + b) / 2.0)
-                        .collect(),
-                    _ => vec![0.0; owned.precip.len()],
-                };
-
-                // Generate contiguous year indices (1-based, 365 per year)
-                let n_total = owned.precip.len();
-                let n_yrs = n_total / 365;
-                let years: Vec<u32> = (0..n_yrs)
-                    .flat_map(|y| std::iter::repeat_n((y + 1) as u32, 365))
-                    .collect();
-
-                let default_temp = vec![0.0; n_total];
-                let tmin_slice = owned.temp_min.as_deref().unwrap_or(&default_temp);
-                let tmax_slice = owned.temp_max.as_deref().unwrap_or(&default_temp);
-
-                let result = apply_perturbations(
-                    &owned.precip,
-                    &temp_mean,
-                    tmin_slice,
-                    tmax_slice,
-                    &owned.months,
-                    &years,
-                    &perturb_cfg,
-                )
-                .with_context(|| format!("perturbation failed for site {site_key}"))?;
-
-                owned.precip = result.precip().to_vec();
-                if owned.temp_max.is_some() {
-                    owned.temp_max = result.temp_max().map(|s| s.to_vec());
-                    owned.temp_min = result.temp_min().map(|s| s.to_vec());
-                }
-            }
-            info!(site = %site_key, "perturbations applied");
         }
 
         site_synthetics.insert(site_key.clone(), site_reals);
@@ -251,30 +217,4 @@ fn bridge_obs(obs: &zeus_io::ObservedData) -> Result<ObsData> {
         obs.water_years(),
     )
     .map_err(|e| anyhow::anyhow!("building ObsData: {e}"))
-}
-
-/// Owned storage for synthetic weather data, enabling borrowed `SyntheticWeather` views.
-struct OwnedSynthetic {
-    precip: Vec<f64>,
-    temp_max: Option<Vec<f64>>,
-    temp_min: Option<Vec<f64>>,
-    months: Vec<u8>,
-    water_years: Vec<i32>,
-    days_of_year: Vec<u16>,
-    realisation: u32,
-}
-
-impl OwnedSynthetic {
-    /// Create a borrowed `SyntheticWeather` view over the owned data.
-    fn as_view(&self) -> Result<SyntheticWeather<'_>, zeus_io::IoError> {
-        SyntheticWeather::new(
-            &self.precip,
-            self.temp_max.as_deref(),
-            self.temp_min.as_deref(),
-            &self.months,
-            &self.water_years,
-            &self.days_of_year,
-            self.realisation,
-        )
-    }
 }

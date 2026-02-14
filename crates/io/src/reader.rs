@@ -9,6 +9,8 @@ use crate::error::IoError;
 use crate::multi_site::{GridMetadata, MultiSiteData};
 use crate::netcdf_read;
 use crate::observed::ObservedData;
+use crate::owned_synthetic::OwnedSyntheticWeather;
+use crate::parquet_read;
 
 // ---------------------------------------------------------------------------
 // ReaderConfig
@@ -273,6 +275,28 @@ fn trim_range(
     }
 
     Ok((first, end))
+}
+
+// ---------------------------------------------------------------------------
+// read_parquet
+// ---------------------------------------------------------------------------
+
+/// Read synthetic weather data from a Parquet file.
+///
+/// Returns one [`OwnedSyntheticWeather`] per realisation found in the file,
+/// sorted by realisation index.
+///
+/// # Errors
+///
+/// Returns [`IoError::FileNotFound`] if the file does not exist, or
+/// [`IoError::Parquet`] / [`IoError::Validation`] on format errors.
+pub fn read_parquet(path: &Path) -> Result<Vec<OwnedSyntheticWeather>, IoError> {
+    let batches = parquet_read::read_batches(path)?;
+    if batches.is_empty() {
+        return Ok(Vec::new());
+    }
+    let has_temp = parquet_read::validate_schema(&batches[0])?;
+    parquet_read::group_by_realisation(&batches, has_temp)
 }
 
 // ---------------------------------------------------------------------------

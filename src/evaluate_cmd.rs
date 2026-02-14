@@ -1,34 +1,97 @@
-use std::path::Path;
+//! Evaluate command: compare synthetic output against observed data.
+
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use zeus_io::read_netcdf;
+use zeus_evaluate::{MultiSiteSynthetic, evaluate};
+use zeus_io::{SyntheticWeather, read_netcdf, read_parquet};
 
-use crate::cli::Cli;
+use crate::cli::EvaluateArgs;
 use crate::config::ZeusConfig;
 use crate::convert;
 
 /// Run the standalone evaluation pipeline.
-///
-/// For V1, this command is a placeholder — inline evaluation in `zeus generate`
-/// is the primary path. A future version will add `read_parquet()` to zeus-io
-/// to support this command fully.
-pub fn run(_cli: &Cli, config: &ZeusConfig, synthetic: &Path) -> Result<()> {
+pub fn run(args: EvaluateArgs) -> Result<()> {
+    // 1. Load project TOML
+    let toml_str = std::fs::read_to_string(&args.config)
+        .with_context(|| format!("failed to read config file: {}", args.config.display()))?;
+    let config: ZeusConfig = toml::from_str(&toml_str).context("failed to parse TOML config")?;
+
+    // 2. Read observed data
     let input =
         config.io.input.as_ref().ok_or_else(|| {
             anyhow::anyhow!("no input path: set [io].input in config or use --input")
         })?;
-
     let reader_cfg = convert::build_reader_config(&config.io)?;
 
     info!(path = %input.display(), "reading observed data");
-    let _multi_site = read_netcdf(input, &reader_cfg)
+    let multi_site = read_netcdf(input, &reader_cfg)
         .with_context(|| format!("failed to read NetCDF: {}", input.display()))?;
-
-    bail!(
-        "parquet reader not yet implemented — use inline evaluation from `zeus generate`\n\
-         Synthetic file was: {}",
-        synthetic.display()
+    info!(
+        n_sites = multi_site.n_sites(),
+        n_timesteps = multi_site.n_timesteps(),
+        "observed data loaded"
     );
+
+    // 3. Enforce single-site (Parquet has no site column)
+    if multi_site.n_sites() > 1 {
+        bail!(
+            "standalone evaluate requires single-site observed data, got {} sites. \
+             Multi-site evaluation is available via `zeus generate` inline evaluation.",
+            multi_site.n_sites()
+        );
+    }
+
+    // 4. Read synthetic Parquet
+    info!(path = %args.synthetic.display(), "reading synthetic data");
+    let owned_realisations = read_parquet(&args.synthetic)
+        .with_context(|| format!("failed to read Parquet: {}", args.synthetic.display()))?;
+    info!(
+        n_realisations = owned_realisations.len(),
+        "synthetic data loaded"
+    );
+
+    if owned_realisations.is_empty() {
+        bail!("synthetic Parquet file contains no realisations");
+    }
+
+    // 5. Build SyntheticWeather views
+    let views: Vec<SyntheticWeather<'_>> = owned_realisations
+        .iter()
+        .map(|o| o.as_view())
+        .collect::<Result<Vec<_>, _>>()
+        .context("failed to build synthetic weather views")?;
+
+    // 6. Build MultiSiteSynthetic — assign all realisations to the observed site key
+    let site_key = multi_site
+        .keys()
+        .next()
+        .expect("single site validated above")
+        .clone();
+
+    let mut eval_views: BTreeMap<String, Vec<SyntheticWeather<'_>>> = BTreeMap::new();
+    eval_views.insert(site_key, views);
+
+    let multi_syn =
+        MultiSiteSynthetic::new(eval_views).context("failed to build MultiSiteSynthetic")?;
+
+    // 7. Run evaluation
+    let eval_cfg = convert::build_evaluate_config(&config.evaluate);
+
+    info!("running evaluation diagnostics");
+    let json = evaluate(&multi_site, &multi_syn, &eval_cfg).context("evaluation failed")?;
+
+    // 8. Write diagnostics JSON
+    let diag_path = args.output.unwrap_or_else(|| {
+        // Auto-derive: foo.parquet -> foo.diagnostics.json
+        args.synthetic.with_extension("diagnostics.json")
+    });
+
+    std::fs::write(&diag_path, &json)
+        .with_context(|| format!("failed to write diagnostics: {}", diag_path.display()))?;
+    info!(path = %diag_path.display(), "diagnostics written");
+
+    Ok(())
 }

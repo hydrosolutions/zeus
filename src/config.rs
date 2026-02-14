@@ -30,10 +30,6 @@ pub struct ZeusConfig {
     #[serde(default)]
     pub markov: MarkovToml,
 
-    /// Perturbation settings (optional — omit to skip).
-    #[serde(default)]
-    pub perturb: Option<PerturbToml>,
-
     /// Evaluate settings.
     #[serde(default)]
     pub evaluate: EvaluateToml,

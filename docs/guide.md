@@ -5,14 +5,14 @@ Zeus is a stochastic weather generator written in pure Rust. It reads observed c
 ## Quick Start
 
 ```bash
-# Minimal run — uses zeus.toml in the current directory
-zeus generate
+# 1. Generate synthetic weather from observed data
+zeus generate -c zeus.toml
 
-# Specify a config file and increase verbosity
-zeus generate -c my_project.toml -vv
+# 2. Apply climate perturbations (optional)
+zeus perturb -i output/synthetic.parquet -o output/perturbed.parquet --temp-delta 2.0
 
-# Override I/O paths from the command line
-zeus generate -i data/obs.nc -o output/syn.parquet -s 42
+# 3. Evaluate synthetic output against observations
+zeus evaluate -c zeus.toml --synthetic output/synthetic.parquet
 ```
 
 Minimal config (`zeus.toml`):
@@ -31,49 +31,76 @@ All other sections use sensible defaults. Add sections only when you need to ove
 
 ## CLI Reference
 
-### Global Flags
+### Global Flag
 
-| Flag | Short | Description | Default |
-|------|-------|-------------|---------|
-| `--config <PATH>` | `-c` | Path to TOML config file | `zeus.toml` |
-| `--input <PATH>` | `-i` | Override `io.input` from config | — |
-| `--output <PATH>` | `-o` | Override `io.output` from config | — |
-| `--seed <SEED>` | `-s` | Override `seed` from config | — |
-| `-v` | — | Verbosity (stackable: `-v` info, `-vv` debug, `-vvv` trace) | warn |
+| Flag | Description |
+|------|-------------|
+| `-v` | Verbosity (stackable: `-v` info, `-vv` debug, `-vvv` trace). Default: warn. |
 
 ### `zeus generate`
 
-Runs the full pipeline:
+Runs the full pipeline: read observed data, WARM simulation, daily disaggregation, write Parquet, run evaluation diagnostics.
 
-1. Read observed climate data from NetCDF.
-2. Per-site WARM simulation (annual precipitation → wavelet MRA → ARMA fit → stochastic simulation).
-3. Filter the simulation pool down to the best realisations.
-4. Daily disaggregation via Markov-chain occurrence modelling and KNN resampling.
-5. Optional climate perturbations (temperature shifts, quantile mapping, occurrence adjustment).
-6. Write synthetic weather to Parquet.
-7. Write evaluation diagnostics to a JSON sidecar (`<output_stem>.diagnostics.json`).
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--config <PATH>` | `-c` | `zeus.toml` | Path to project TOML config file. |
+| `--output <PATH>` | `-o` | — | Override `io.output` from config. |
+| `--seed <SEED>` | `-s` | — | Override `seed` from config. |
 
 ```bash
 zeus generate
-zeus generate -c project.toml -vv
-zeus generate -i obs.nc -o syn.parquet -s 12345
+zeus generate -c project.toml -o output/syn.parquet -s 42 -vv
+```
+
+### `zeus perturb`
+
+Applies climate perturbations to an existing synthetic Parquet file. Perturbations can be specified via a TOML config file, CLI flags, or both (CLI flags override config).
+
+| Flag | Short | Required | Description |
+|------|-------|----------|-------------|
+| `--input <PATH>` | `-i` | yes | Input synthetic Parquet file. |
+| `--output <PATH>` | `-o` | yes | Output perturbed Parquet file. |
+| `--config <PATH>` | `-c` | no | Perturbation TOML config file. |
+| `--temp-delta <F>` | `--dt` | no | Uniform temperature delta (degrees) for all months. |
+| `--precip-factor <F>` | `--dp` | no | Uniform precipitation scaling factor for all months. |
+
+At least one of `--config`, `--temp-delta`, or `--precip-factor` must be provided.
+
+```bash
+# Apply +2°C temperature shift
+zeus perturb -i syn.parquet -o warm.parquet --temp-delta 2.0
+
+# Apply 10% precipitation reduction
+zeus perturb -i syn.parquet -o dry.parquet --precip-factor 0.90
+
+# Use a detailed perturbation config
+zeus perturb -i syn.parquet -o future.parquet -c perturb.toml
 ```
 
 ### `zeus evaluate`
 
-Compare synthetic output against observations. Reads the observed NetCDF from the config and a synthetic Parquet file.
+Compare synthetic output against observations. Reads the observed NetCDF from the project config and a synthetic Parquet file.
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--config <PATH>` | `-c` | `zeus.toml` | Path to project TOML config file. |
+| `--synthetic <PATH>` | — | — | Path to synthetic Parquet file (required). |
+| `--output <PATH>` | `-o` | auto | Path for diagnostics JSON. Default: `<synthetic>.diagnostics.json`. |
 
 ```bash
 zeus evaluate --synthetic output/synthetic.parquet
+zeus evaluate -c project.toml --synthetic output/perturbed.parquet -o diag.json
 ```
 
-> **Note:** The `evaluate` subcommand is a V1 placeholder. Full standalone evaluation will be available once the Parquet reader is implemented. The inline evaluation that runs automatically at the end of `generate` is fully functional.
+> **Note:** Standalone evaluate requires single-site observed data. Multi-site evaluation runs automatically at the end of `zeus generate`.
 
 ---
 
 ## Configuration Reference
 
 The config file is TOML. Every section except `[io]` is optional — omit a section entirely to use its defaults. All sections enforce `deny_unknown_fields`, so typos in key names produce clear errors.
+
+> **Note:** The `[perturb]` section has been removed from the project TOML. Climate perturbations are now applied via the standalone `zeus perturb` command with its own config file.
 
 ### Top-Level
 
@@ -249,68 +276,6 @@ quantile = 0.8
 
 ---
 
-### `[perturb]` — Climate Perturbations (Optional)
-
-Omit this entire section to skip perturbations. When present, perturbations are applied in this order: temperature → quantile mapping → occurrence → safety rails.
-
-```toml
-[perturb]
-precip_floor = 0.0
-precip_cap = 500.0
-```
-
-| Key | Type | Required | Default | Description |
-|-----|------|----------|---------|-------------|
-| `precip_floor` | float | no | `0.0` | Minimum precipitation after perturbation (mm/day). |
-| `precip_cap` | float | no | `500.0` | Maximum precipitation after perturbation (mm/day). |
-
-#### `[perturb.temperature]` — Temperature Shifts
-
-```toml
-[perturb.temperature]
-deltas = [0.5, 0.6, 0.7, 0.6, 0.4, 0.3, 0.2, 0.2, 0.3, 0.5, 0.6, 0.7]
-transient = false
-```
-
-| Key | Type | Required | Default | Description |
-|-----|------|----------|---------|-------------|
-| `deltas` | [float; 12] | yes | — | Monthly temperature deltas (degrees). Applied to Tmax and Tmin. |
-| `transient` | boolean | no | `false` | If true, ramp deltas linearly from 0 to 2×delta over the simulation period. |
-
-#### `[perturb.quantile_map]` — Precipitation Intensity Adjustment
-
-Uses Gamma-to-Gamma quantile mapping to adjust precipitation intensity distributions.
-
-```toml
-[perturb.quantile_map]
-mean_factors = [0.95, 0.95, 0.95, 0.95, 1.05, 1.05, 1.05, 1.05, 1.0, 1.0, 1.0, 1.0]
-var_factors  = [1.0,  1.0,  1.0,  1.0,  1.0,  1.0,  1.0,  1.0,  1.0, 1.0, 1.0, 1.0]
-intensity_threshold = 0.1
-```
-
-| Key | Type | Required | Default | Description |
-|-----|------|----------|---------|-------------|
-| `mean_factors` | [float; 12] | yes | — | Monthly scaling factors for mean precipitation intensity. |
-| `var_factors` | [float; 12] | yes | — | Monthly scaling factors for precipitation variance. |
-| `intensity_threshold` | float | no | `0.0` | Wet-day threshold for quantile mapping (mm/day). |
-
-#### `[perturb.occurrence]` — Precipitation Occurrence Adjustment
-
-```toml
-[perturb.occurrence]
-factors = [1.1, 1.1, 1.1, 1.1, 0.9, 0.9, 0.9, 0.9, 1.0, 1.0, 1.0, 1.0]
-transient = false
-intensity_threshold = 0.3
-```
-
-| Key | Type | Required | Default | Description |
-|-----|------|----------|---------|-------------|
-| `factors` | [float; 12] | yes | — | Monthly multipliers for wet-day occurrence probability. |
-| `transient` | boolean | no | `false` | If true, ramp factors linearly over the simulation period. |
-| `intensity_threshold` | float | no | `0.3` | Wet-day threshold for occurrence adjustment (mm/day). |
-
----
-
 ### `[evaluate]` — Evaluation Diagnostics
 
 Controls the diagnostics computed after generation. Results are written to a JSON sidecar file alongside the Parquet output.
@@ -323,6 +288,39 @@ precip_threshold = 0.01
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `precip_threshold` | float | no | `0.01` | Wet-day threshold for evaluation statistics (mm/day). |
+
+---
+
+### Perturbation Config (standalone)
+
+When using `zeus perturb -c <FILE>`, the TOML file uses the same format as the former `[perturb]` section — a flat file, not nested under `[perturb]`:
+
+```toml
+precip_floor = 0.0
+precip_cap = 500.0
+
+[temperature]
+deltas = [1.2, 1.3, 1.5, 1.4, 1.0, 0.8, 0.7, 0.7, 0.9, 1.1, 1.2, 1.3]
+transient = true
+
+[quantile_map]
+mean_factors = [0.90, 0.90, 0.95, 1.00, 1.05, 1.10, 1.10, 1.05, 1.00, 0.95, 0.90, 0.90]
+var_factors  = [1.10, 1.10, 1.05, 1.00, 1.00, 0.95, 0.95, 1.00, 1.05, 1.10, 1.10, 1.10]
+intensity_threshold = 0.1
+
+[occurrence]
+factors = [1.05, 1.05, 1.00, 0.95, 0.90, 0.85, 0.85, 0.90, 0.95, 1.00, 1.05, 1.05]
+transient = true
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `precip_floor` | float | `0.0` | Minimum precipitation after perturbation (mm/day). |
+| `precip_cap` | float | `500.0` | Maximum precipitation after perturbation (mm/day). |
+
+See below for `[temperature]`, `[quantile_map]`, and `[occurrence]` sub-tables — these use the same schema as the former `[perturb.*]` sections.
+
+CLI flags `--temp-delta` and `--precip-factor` provide a shorthand: `--temp-delta 2.0` is equivalent to setting `[temperature] deltas = [2.0; 12]`, and `--precip-factor 0.90` is equivalent to setting `[quantile_map] mean_factors = [0.90; 12]`.
 
 ---
 
@@ -344,7 +342,7 @@ The output Parquet file contains one row per simulated day, with columns:
 
 ### Diagnostics JSON
 
-When `generate` completes, a `<output_stem>.diagnostics.json` file is written alongside the Parquet output. It contains per-site comparison metrics between observed and synthetic data including means, variances, wet-day statistics, and cross-realisation consistency scores.
+Diagnostics JSON is produced by both `zeus generate` (automatically) and `zeus evaluate` (standalone). When using `zeus evaluate`, the output path defaults to `<synthetic>.diagnostics.json` or can be set with `-o`. It contains per-site comparison metrics between observed and synthetic data including means, variances, wet-day statistics, and cross-realisation consistency scores.
 
 ---
 
@@ -362,38 +360,30 @@ Zeus expects a CF-convention NetCDF file with:
 
 ## Pipeline Architecture
 
-Zeus is composed of 13 specialized crates that execute in sequence:
+Zeus decomposes weather generation into three composable commands:
 
 ```
-NetCDF input (zeus-io)
-  │
-  ▼
-Annual aggregation (zeus-calendar)
-  │
-  ▼
-Wavelet MRA decomposition (zeus-wavelet)
-  │
-  ▼
-ARMA fitting & simulation per MRA level (zeus-arma)
-  │
-  ▼
-WARM pool assembly & filtering (zeus-warm)
-  │
-  ▼
-Markov-chain occurrence modelling (zeus-markov)
-  │
-  ▼
-KNN daily disaggregation (zeus-knn, zeus-resample)
-  │
-  ▼
-Climate perturbations (zeus-perturb, zeus-quantile-map)
-  │
-  ▼
-Parquet output (zeus-io)
-  │
-  ▼
-Evaluation diagnostics (zeus-evaluate)
+zeus generate                    zeus perturb                  zeus evaluate
+┌────────────────────┐   ┌─────────────────────────┐   ┌──────────────────────┐
+│ NetCDF input       │   │ Read synthetic Parquet   │   │ Read observed NetCDF │
+│   ↓                │   │   ↓                     │   │ Read synthetic Parquet│
+│ Annual aggregation │   │ Apply perturbations:    │   │   ↓                  │
+│   ↓                │   │   temperature shift     │   │ Compute diagnostics  │
+│ Wavelet MRA        │   │   quantile mapping      │   │   timeseries stats   │
+│   ↓                │   │   occurrence adjustment  │   │   correlations       │
+│ ARMA simulation    │   │   ↓                     │   │   MAE scorecard      │
+│   ↓                │   │ Write perturbed Parquet  │   │   ↓                  │
+│ Pool filtering     │   └─────────────────────────┘   │ Write diagnostics    │
+│   ↓                │                                  │ JSON                 │
+│ Markov-KNN resample│                                  └──────────────────────┘
+│   ↓                │
+│ Write Parquet      │
+│   ↓                │
+│ Inline evaluation  │
+└────────────────────┘
 ```
+
+The generate step is expensive. Perturbation and evaluation are cheap, enabling workflows like grid sweeps over 900+ scenarios via bash loops.
 
 ---
 
@@ -435,30 +425,32 @@ sd_tol = 0.02
 spectral_corr_min = 0.70
 ```
 
-### Climate change scenario
+### Three-step workflow
 
-```toml
-seed = 7
+```bash
+# 1. Generate base synthetic data
+zeus generate -c project.toml -s 42
 
-[io]
-input = "data/obs.nc"
-output = "output/future.parquet"
+# 2. Apply climate perturbations
+zeus perturb -i output/syn.parquet -o output/future.parquet --temp-delta 2.5 --precip-factor 0.90
 
-[perturb]
-precip_cap = 300.0
+# 3. Evaluate perturbed output
+zeus evaluate -c project.toml --synthetic output/future.parquet
+```
 
-[perturb.temperature]
-deltas = [1.2, 1.3, 1.5, 1.4, 1.0, 0.8, 0.7, 0.7, 0.9, 1.1, 1.2, 1.3]
-transient = true
+### Grid sweep (30x30 temperature x precipitation scenarios)
 
-[perturb.quantile_map]
-mean_factors = [0.90, 0.90, 0.95, 1.00, 1.05, 1.10, 1.10, 1.05, 1.00, 0.95, 0.90, 0.90]
-var_factors  = [1.10, 1.10, 1.05, 1.00, 1.00, 0.95, 0.95, 1.00, 1.05, 1.10, 1.10, 1.10]
-intensity_threshold = 0.1
+```bash
+zeus generate -c project.toml
 
-[perturb.occurrence]
-factors = [1.05, 1.05, 1.00, 0.95, 0.90, 0.85, 0.85, 0.90, 0.95, 1.00, 1.05, 1.05]
-transient = true
+for dt in $(seq 0.0 0.5 14.5); do
+  for dp in $(seq 0.70 0.01 0.99); do
+    zeus perturb \
+      -i output/syn.parquet \
+      -o "output/grid/dt${dt}_dp${dp}.parquet" \
+      --temp-delta "$dt" --precip-factor "$dp"
+  done
+done
 ```
 
 ### Precipitation-only run
@@ -471,4 +463,28 @@ input = "data/precip_only.nc"
 output = "output/precip.parquet"
 temp_max_var = null
 temp_min_var = null
+```
+
+### Detailed perturbation config
+
+```toml
+# perturb.toml — used with zeus perturb -c perturb.toml
+precip_cap = 300.0
+
+[temperature]
+deltas = [1.2, 1.3, 1.5, 1.4, 1.0, 0.8, 0.7, 0.7, 0.9, 1.1, 1.2, 1.3]
+transient = true
+
+[quantile_map]
+mean_factors = [0.90, 0.90, 0.95, 1.00, 1.05, 1.10, 1.10, 1.05, 1.00, 0.95, 0.90, 0.90]
+var_factors  = [1.10, 1.10, 1.05, 1.00, 1.00, 0.95, 0.95, 1.00, 1.05, 1.10, 1.10, 1.10]
+intensity_threshold = 0.1
+
+[occurrence]
+factors = [1.05, 1.05, 1.00, 0.95, 0.90, 0.85, 0.85, 0.90, 0.95, 1.00, 1.05, 1.05]
+transient = true
+```
+
+```bash
+zeus perturb -i output/syn.parquet -o output/future.parquet -c perturb.toml
 ```
