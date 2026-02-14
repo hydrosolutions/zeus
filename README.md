@@ -9,7 +9,7 @@ Zeus couples **wavelet-based low-frequency modeling** (WARM) with **daily Markov
 ## Architecture
 
 ```text
-Observed Climate Data
+Observed Climate Data (NetCDF)
         │
         ▼
 ┌──────────────────────────────────┐
@@ -37,26 +37,50 @@ Observed Climate Data
 └──────────────────────────────────┘
         │
         ▼
-   Synthetic Weather (NetCDF/CSV)
+   Synthetic Weather (Parquet)
+```
+
+## Usage
+
+```sh
+# Run the full generation pipeline
+zeus -c config.toml generate
+
+# Override paths and seed via CLI flags
+zeus -c config.toml -i data/obs.nc -o output/syn.parquet -s 42 generate
+
+# Increase verbosity (-v info, -vv debug, -vvv trace)
+zeus -vv -c config.toml generate
+```
+
+The generator reads observed climate data from NetCDF, runs the WARM simulation and daily resampling pipeline, applies optional climate perturbations, writes synthetic weather to Parquet, and produces evaluation diagnostics as a JSON sidecar file.
+
+Configuration is driven by a TOML file with sections for `[io]`, `[warm]`, `[filter]`, `[resample]`, `[markov]`, `[perturb]` (optional), and `[evaluate]`. All sections have sensible defaults — a minimal config only needs input/output paths:
+
+```toml
+seed = 42
+
+[io]
+input = "data/observed.nc"
+output = "output/synthetic.parquet"
 ```
 
 ## Workspace
 
-| Crate | Status | Description |
-|-------|--------|-------------|
-| **zeus-arma** | Done | ARMA(p,q) via exact MLE / Kalman filter, BFGS optimizer, AIC selection |
-| **zeus-wavelet** | Done | MODWT/MRA decomposition, Morlet CWT, significance testing |
-| **zeus-warm** | Done | WARM pipeline — wavelet-ARMA simulation with adaptive pool filtering |
-| **zeus-markov** | Done | Three-state precipitation Markov chain with monthly transitions |
-| **zeus-knn** | Done | k-nearest-neighbor sampling (uniform, rank, distance-weighted) |
-| **zeus-resample** | Done | Daily disaggregation via Markov-conditioned KNN |
-| **zeus-quantile-map** | Done | Gamma-to-Gamma parametric quantile mapping for precipitation adjustment |
-| **zeus-perturb** | Done | Climate perturbation pipeline — temperature scaling, occurrence adjustment, safety rails |
-| **zeus-stats** | Done | Centralised statistics — mean, variance, sd, quantile, median, robust scale, correlation |
-| **zeus-calendar** | Done | 365-day no-leap calendar, water-year assignment |
-| zeus-pet | Scaffold | Not Part of V1 |
-| **zeus-evaluate** | Done | Simulation vs. observation diagnostics — timeseries stats, correlations, MAE scorecard |
-| **zeus-io** | Done | NetCDF reader and Parquet writer for climate data |
+| Crate | Description |
+|-------|-------------|
+| **zeus-arma** | ARMA(p,q) via exact MLE / Kalman filter, BFGS optimizer, AIC selection |
+| **zeus-wavelet** | MODWT/MRA decomposition, Morlet CWT, significance testing |
+| **zeus-warm** | WARM pipeline — wavelet-ARMA simulation with adaptive pool filtering |
+| **zeus-markov** | Three-state precipitation Markov chain with monthly transitions |
+| **zeus-knn** | k-nearest-neighbor sampling (uniform, rank, distance-weighted) |
+| **zeus-resample** | Daily disaggregation via Markov-conditioned KNN |
+| **zeus-quantile-map** | Gamma-to-Gamma parametric quantile mapping for precipitation adjustment |
+| **zeus-perturb** | Climate perturbation pipeline — temperature scaling, occurrence adjustment, safety rails |
+| **zeus-stats** | Centralised statistics — mean, variance, sd, quantile, median, robust scale, correlation |
+| **zeus-calendar** | 365-day no-leap calendar, water-year assignment |
+| **zeus-evaluate** | Simulation vs. observation diagnostics — timeseries stats, correlations, MAE scorecard |
+| **zeus-io** | NetCDF reader and Parquet writer for climate data |
 
 ## Build & Test
 
