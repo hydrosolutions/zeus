@@ -54,8 +54,8 @@ Observed Climate Data
 | **zeus-perturb** | Done | Climate perturbation pipeline — temperature scaling, occurrence adjustment, safety rails |
 | **zeus-stats** | Done | Centralised statistics — mean, variance, sd, quantile, median, robust scale, correlation |
 | **zeus-calendar** | Done | 365-day no-leap calendar, water-year assignment |
-| zeus-pet | Scaffold | Hargreaves potential evapotranspiration |
-| zeus-evaluate | Scaffold | Simulation vs. observation diagnostics |
+| zeus-pet | Scaffold | Not Part of V1 |
+| **zeus-evaluate** | Done | Simulation vs. observation diagnostics — timeseries stats, correlations, MAE scorecard |
 | **zeus-io** | Done | NetCDF reader and Parquet writer for climate data |
 
 ## Build & Test
