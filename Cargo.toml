@@ -12,6 +12,25 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# Workspace crates
 zeus-arma = { path = "crates/arma" }
+zeus-calendar = { path = "crates/calendar" }
+zeus-evaluate = { path = "crates/evaluate" }
+zeus-io = { path = "crates/io" }
+zeus-knn = { path = "crates/knn" }
+zeus-markov = { path = "crates/markov" }
+zeus-perturb = { path = "crates/perturb" }
+zeus-quantile-map = { path = "crates/quantile-map" }
+zeus-resample = { path = "crates/resample" }
+zeus-stats = { path = "crates/stats" }
 zeus-warm = { path = "crates/warm" }
 zeus-wavelet = { path = "crates/wavelet" }
+# External
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
