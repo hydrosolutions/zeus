@@ -4,4 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+zeus-io = { path = "../io" }
+zeus-stats = { path = "../stats" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
+
+[dev-dependencies]
+approx = "0.5"
+zeus-calendar = { path = "../calendar" }

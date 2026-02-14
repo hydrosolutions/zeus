@@ -1,4 +1,4 @@
-// TODO: skewness, kurtosis, spell lengths, tail-mass metrics, area averages, distribution fitting
+// TODO: kurtosis, tail-mass metrics, area averages, distribution fitting
 
 //! Statistical helper functions for the Zeus weather generator.
 
@@ -138,6 +138,99 @@ pub fn pearson_correlation(x: &[f64], y: &[f64]) -> Option<f64> {
     }
 
     Some(sum_xy / denom)
+}
+
+/// Skewness using R's `e1071::skewness` type 1 formula.
+///
+/// Computes `m3 / m2^1.5` where `m2` and `m3` are population moments
+/// (dividing by `n`, not `n-1`).
+///
+/// Returns `None` if fewer than 3 elements or if `m2 < 1e-20`.
+pub fn skewness(data: &[f64]) -> Option<f64> {
+    let n = data.len();
+    if n < 3 {
+        return None;
+    }
+
+    let nf = n as f64;
+    let mean: f64 = data.iter().sum::<f64>() / nf;
+
+    let m2: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / nf;
+    if m2 < 1e-20 {
+        return None;
+    }
+
+    let m3: f64 = data.iter().map(|&x| (x - mean).powi(3)).sum::<f64>() / nf;
+
+    Some(m3 / m2.powf(1.5))
+}
+
+/// Spell lengths (run-length encoding of wet/dry sequences).
+///
+/// Returns `(wet_spells, dry_spells)` where each vector contains the lengths
+/// of consecutive runs of `true` (wet) or `false` (dry) values.
+///
+/// Empty input returns two empty vectors.
+pub fn spell_lengths(wet: &[bool]) -> (Vec<usize>, Vec<usize>) {
+    if wet.is_empty() {
+        return (vec![], vec![]);
+    }
+
+    let mut wet_spells = Vec::new();
+    let mut dry_spells = Vec::new();
+
+    let mut current_state = wet[0];
+    let mut current_len = 1;
+
+    for &w in &wet[1..] {
+        if w == current_state {
+            current_len += 1;
+        } else {
+            // Run ended, record it
+            if current_state {
+                wet_spells.push(current_len);
+            } else {
+                dry_spells.push(current_len);
+            }
+            current_state = w;
+            current_len = 1;
+        }
+    }
+
+    // Record the final run
+    if current_state {
+        wet_spells.push(current_len);
+    } else {
+        dry_spells.push(current_len);
+    }
+
+    (wet_spells, dry_spells)
+}
+
+/// Mean absolute error between observed and simulated values.
+///
+/// Computes `sum(|obs[i] - sim[i]|) / n`.
+///
+/// # Panics
+///
+/// Panics if the slices are empty or have different lengths.
+pub fn mae(observed: &[f64], simulated: &[f64]) -> f64 {
+    assert!(
+        !observed.is_empty(),
+        "mae: observed slice must not be empty"
+    );
+    assert!(
+        observed.len() == simulated.len(),
+        "mae: observed and simulated slices must have the same length"
+    );
+
+    let sum_abs_diff: f64 = observed
+        .iter()
+        .zip(simulated.iter())
+        .map(|(o, s)| (o - s).abs())
+        .sum();
+
+    sum_abs_diff / observed.len() as f64
 }
 
 #[cfg(test)]
@@ -286,5 +379,77 @@ mod tests {
     #[should_panic(expected = "median: input must not be empty")]
     fn test_median_empty_panics() {
         median(&[]);
+    }
+
+    #[test]
+    fn test_skewness_symmetric() {
+        let data = [-2.0, -1.0, 0.0, 1.0, 2.0];
+        let sk = skewness(&data).unwrap();
+        assert_relative_eq!(sk, 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_skewness_right_skewed() {
+        let data = [1.0, 1.0, 1.0, 1.0, 10.0];
+        let sk = skewness(&data).unwrap();
+        assert!(sk > 0.0, "Expected positive skewness, got {}", sk);
+    }
+
+    #[test]
+    fn test_skewness_insufficient() {
+        assert!(skewness(&[1.0, 2.0]).is_none());
+    }
+
+    #[test]
+    fn test_skewness_constant() {
+        let data = [5.0, 5.0, 5.0, 5.0];
+        assert!(skewness(&data).is_none());
+    }
+
+    #[test]
+    fn test_spell_lengths_basic() {
+        let wet = [true, true, false, true, false, false, false];
+        let (wet_spells, dry_spells) = spell_lengths(&wet);
+        assert_eq!(wet_spells, vec![2, 1]);
+        assert_eq!(dry_spells, vec![1, 3]);
+    }
+
+    #[test]
+    fn test_spell_lengths_empty() {
+        let (wet_spells, dry_spells) = spell_lengths(&[]);
+        assert_eq!(wet_spells, Vec::<usize>::new());
+        assert_eq!(dry_spells, Vec::<usize>::new());
+    }
+
+    #[test]
+    fn test_spell_lengths_all_wet() {
+        let wet = [true, true, true];
+        let (wet_spells, dry_spells) = spell_lengths(&wet);
+        assert_eq!(wet_spells, vec![3]);
+        assert_eq!(dry_spells, Vec::<usize>::new());
+    }
+
+    #[test]
+    fn test_spell_lengths_all_dry() {
+        let wet = [false, false];
+        let (wet_spells, dry_spells) = spell_lengths(&wet);
+        assert_eq!(wet_spells, Vec::<usize>::new());
+        assert_eq!(dry_spells, vec![2]);
+    }
+
+    #[test]
+    fn test_mae_basic() {
+        let obs = [1.0, 2.0, 3.0];
+        let sim = [1.5, 2.5, 3.5];
+        let error = mae(&obs, &sim);
+        assert_relative_eq!(error, 0.5, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_mae_identical() {
+        let obs = [1.0, 2.0, 3.0];
+        let sim = [1.0, 2.0, 3.0];
+        let error = mae(&obs, &sim);
+        assert_relative_eq!(error, 0.0, epsilon = 1e-10);
     }
 }
