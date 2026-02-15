@@ -68,7 +68,12 @@ pub(crate) fn read_3d_f64(
     let ny = dims[1].len();
     let nx = dims[2].len();
 
-    let data = var.get_values::<f64, _>(..)?;
+    let mut data = var.get_values::<f64, _>(..)?;
+    if let Some(fv) = read_fill_value(&var)
+        && !fv.is_nan()
+    {
+        replace_fill_with_nan(&mut data, fv);
+    }
     Ok((data, [nt, ny, nx]))
 }
 
@@ -136,6 +141,38 @@ pub(crate) fn read_time_units(
         .unwrap_or_else(|| "noleap".to_string());
 
     Ok((calendar, base_date))
+}
+
+/// Read the `_FillValue` or `missing_value` attribute from a variable, promoting
+/// to `f64`. Returns `None` if neither attribute exists.
+fn read_fill_value(var: &netcdf::Variable) -> Option<f64> {
+    for attr_name in ["_FillValue", "missing_value"] {
+        if let Some(val) = var.attribute_value(attr_name).and_then(|res| res.ok()) {
+            match val {
+                AttributeValue::Double(v) => return Some(v),
+                AttributeValue::Float(v) => return Some(v as f64),
+                AttributeValue::Short(v) => return Some(v as f64),
+                AttributeValue::Int(v) => return Some(v as f64),
+                AttributeValue::Longlong(v) => return Some(v as f64),
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Replace every element in `data` whose bit-pattern matches `fill_value` with
+/// [`f64::NAN`]. This is a no-op if `fill_value` is already NaN.
+pub(crate) fn replace_fill_with_nan(data: &mut [f64], fill_value: f64) {
+    if fill_value.is_nan() {
+        return;
+    }
+    let fill_bits = fill_value.to_bits();
+    for val in data.iter_mut() {
+        if val.to_bits() == fill_bits {
+            *val = f64::NAN;
+        }
+    }
 }
 
 /// Convert floating-point day offsets from a base date into [`NoLeapDate`]s.
@@ -289,5 +326,65 @@ mod tests {
             matches!(err, IoError::Calendar { .. }),
             "expected IoError::Calendar, got: {err:?}"
         );
+    }
+
+    // --- replace_fill_with_nan tests ---
+
+    #[test]
+    fn fill_nan_basic_replacement() {
+        let fill = -9999.0;
+        let mut data = vec![1.0, -9999.0, 3.0, -9999.0, 5.0];
+        replace_fill_with_nan(&mut data, fill);
+        assert_eq!(data[0], 1.0);
+        assert!(data[1].is_nan());
+        assert_eq!(data[2], 3.0);
+        assert!(data[3].is_nan());
+        assert_eq!(data[4], 5.0);
+    }
+
+    #[test]
+    fn fill_nan_no_matches() {
+        let fill = -9999.0;
+        let mut data = vec![1.0, 2.0, 3.0];
+        replace_fill_with_nan(&mut data, fill);
+        assert_eq!(data, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn fill_nan_all_matches() {
+        let fill = -9999.0;
+        let mut data = vec![-9999.0, -9999.0, -9999.0];
+        replace_fill_with_nan(&mut data, fill);
+        for val in &data {
+            assert!(val.is_nan(), "expected NaN, got {val}");
+        }
+    }
+
+    #[test]
+    fn fill_nan_already_nan() {
+        // When fill_value is NaN the function is a no-op.
+        let mut data = vec![1.0, f64::NAN, 3.0];
+        replace_fill_with_nan(&mut data, f64::NAN);
+        assert_eq!(data[0], 1.0);
+        assert!(data[1].is_nan()); // untouched
+        assert_eq!(data[2], 3.0);
+    }
+
+    #[test]
+    fn fill_nan_large_fill_value() {
+        let fill = 1e20;
+        let mut data = vec![0.5, 1e20, -1e20, 1e20];
+        replace_fill_with_nan(&mut data, fill);
+        assert_eq!(data[0], 0.5);
+        assert!(data[1].is_nan());
+        assert_eq!(data[2], -1e20);
+        assert!(data[3].is_nan());
+    }
+
+    #[test]
+    fn fill_nan_empty_slice() {
+        let mut data: Vec<f64> = vec![];
+        replace_fill_with_nan(&mut data, -9999.0);
+        assert!(data.is_empty());
     }
 }

@@ -1,9 +1,4 @@
 //! Integration test: NetCDF reader config and file-not-found handling.
-//!
-//! Creating a full NetCDF fixture programmatically requires the `netcdf`
-//! crate's write support, which is not exposed through the current
-//! dependency configuration. These tests cover the reader configuration
-//! and error paths that do not require an actual NetCDF file.
 
 use std::path::Path;
 

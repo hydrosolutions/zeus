@@ -59,6 +59,9 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     info!(path = %input.display(), "reading observed data");
     let multi_site = read_netcdf(input, &reader_cfg)
         .with_context(|| format!("failed to read NetCDF: {}", input.display()))?;
+    if multi_site.n_sites() == 0 {
+        anyhow::bail!("no valid grid cells after filtering missing data");
+    }
     info!(
         n_sites = multi_site.n_sites(),
         n_timesteps = multi_site.n_timesteps(),

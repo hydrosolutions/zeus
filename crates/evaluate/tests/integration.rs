@@ -38,7 +38,7 @@ fn test_evaluate_full_pipeline() {
     obs_sites.insert("site_a".to_string(), obs_a);
     obs_sites.insert("site_b".to_string(), obs_b);
 
-    let grid = GridMetadata::new(vec![0.0, 1.0], vec![0.0, 1.0], 2, 1).unwrap();
+    let grid = GridMetadata::new(vec![0.0, 1.0], vec![0.0, 1.0]).unwrap();
     let observed = MultiSiteData::new(obs_sites, grid).unwrap();
 
     // Create synthetic data (2 realisations per site)
@@ -212,7 +212,7 @@ fn test_evaluate_mismatched_sites_error() {
     let mut obs_sites = BTreeMap::new();
     obs_sites.insert("site_a".to_string(), obs);
 
-    let grid = GridMetadata::new(vec![0.0], vec![0.0], 1, 1).unwrap();
+    let grid = GridMetadata::new(vec![0.0], vec![0.0]).unwrap();
     let observed = MultiSiteData::new(obs_sites, grid).unwrap();
 
     // Create synthetic data with site "site_b" (different site)

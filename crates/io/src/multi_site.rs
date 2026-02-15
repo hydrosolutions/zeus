@@ -9,17 +9,15 @@ use crate::observed::ObservedData;
 // GridMetadata
 // ---------------------------------------------------------------------------
 
-/// Spatial metadata describing a regular grid of observation sites.
+/// Spatial metadata describing a collection of observation sites.
 ///
-/// Stores per-cell longitude and latitude arrays whose length must equal
-/// `nx * ny`. Construction fails with [`IoError::DimensionMismatch`] when the
-/// coordinate arrays do not match the declared grid dimensions.
+/// Stores per-cell longitude and latitude arrays whose lengths must be equal.
+/// Construction fails with [`IoError::DimensionMismatch`] when the coordinate
+/// arrays differ in length.
 #[derive(Debug, Clone)]
 pub struct GridMetadata {
     lons: Vec<f64>,
     lats: Vec<f64>,
-    nx: usize,
-    ny: usize,
 }
 
 impl GridMetadata {
@@ -27,28 +25,17 @@ impl GridMetadata {
     ///
     /// # Errors
     ///
-    /// Returns [`IoError::DimensionMismatch`] if `lons.len()` or `lats.len()`
-    /// does not equal `nx * ny`.
-    pub fn new(lons: Vec<f64>, lats: Vec<f64>, nx: usize, ny: usize) -> Result<Self, IoError> {
-        let expected = nx * ny;
-
-        if lons.len() != expected {
-            return Err(IoError::DimensionMismatch {
-                name: "longitude".into(),
-                expected,
-                got: lons.len(),
-            });
-        }
-
-        if lats.len() != expected {
+    /// Returns [`IoError::DimensionMismatch`] if `lons.len() != lats.len()`.
+    pub fn new(lons: Vec<f64>, lats: Vec<f64>) -> Result<Self, IoError> {
+        if lons.len() != lats.len() {
             return Err(IoError::DimensionMismatch {
                 name: "latitude".into(),
-                expected,
+                expected: lons.len(),
                 got: lats.len(),
             });
         }
 
-        Ok(Self { lons, lats, nx, ny })
+        Ok(Self { lons, lats })
     }
 
     /// Per-cell longitude values.
@@ -61,19 +48,9 @@ impl GridMetadata {
         &self.lats
     }
 
-    /// Number of columns in the grid.
-    pub fn nx(&self) -> usize {
-        self.nx
-    }
-
-    /// Number of rows in the grid.
-    pub fn ny(&self) -> usize {
-        self.ny
-    }
-
-    /// Total number of grid cells (`nx * ny`).
+    /// Total number of grid cells.
     pub fn n_cells(&self) -> usize {
-        self.nx * self.ny
+        self.lons.len()
     }
 }
 
@@ -209,14 +186,10 @@ mod tests {
         let grid = GridMetadata::new(
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
-            3,
-            2,
         );
         assert!(grid.is_ok());
 
         let g = grid.unwrap();
-        assert_eq!(g.nx(), 3);
-        assert_eq!(g.ny(), 2);
         assert_eq!(g.n_cells(), 6);
         assert_eq!(g.lons(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         assert_eq!(g.lats(), &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
@@ -224,12 +197,7 @@ mod tests {
 
     #[test]
     fn grid_lon_length_mismatch() {
-        let result = GridMetadata::new(
-            vec![1.0, 2.0], // expected 6
-            vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
-            3,
-            2,
-        );
+        let result = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -239,9 +207,9 @@ mod tests {
                 expected,
                 got,
             } => {
-                assert_eq!(name, "longitude");
-                assert_eq!(expected, 6);
-                assert_eq!(got, 2);
+                assert_eq!(name, "latitude");
+                assert_eq!(expected, 2);
+                assert_eq!(got, 6);
             }
             other => panic!("expected DimensionMismatch, got {other:?}"),
         }
@@ -249,12 +217,7 @@ mod tests {
 
     #[test]
     fn grid_lat_length_mismatch() {
-        let result = GridMetadata::new(
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            vec![10.0, 20.0, 30.0], // expected 6
-            3,
-            2,
-        );
+        let result = GridMetadata::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![10.0, 20.0, 30.0]);
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -276,7 +239,7 @@ mod tests {
 
     #[test]
     fn multi_site_valid_construction() {
-        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0], 2, 1).unwrap();
+        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0]).unwrap();
 
         let mut sites = BTreeMap::new();
         sites.insert("site_a".to_string(), make_observed(30));
@@ -292,7 +255,7 @@ mod tests {
 
     #[test]
     fn multi_site_count_mismatch() {
-        let grid = GridMetadata::new(vec![1.0, 2.0, 3.0], vec![10.0, 20.0, 30.0], 3, 1).unwrap();
+        let grid = GridMetadata::new(vec![1.0, 2.0, 3.0], vec![10.0, 20.0, 30.0]).unwrap();
 
         let mut sites = BTreeMap::new();
         sites.insert("site_a".to_string(), make_observed(30));
@@ -319,7 +282,7 @@ mod tests {
 
     #[test]
     fn multi_site_non_uniform_timesteps() {
-        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0], 2, 1).unwrap();
+        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0]).unwrap();
 
         let mut sites = BTreeMap::new();
         sites.insert("site_a".to_string(), make_observed(30));
@@ -344,7 +307,7 @@ mod tests {
 
     #[test]
     fn multi_site_get() {
-        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0], 2, 1).unwrap();
+        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0]).unwrap();
 
         let mut sites = BTreeMap::new();
         sites.insert("alpha".to_string(), make_observed(10));
@@ -359,7 +322,7 @@ mod tests {
 
     #[test]
     fn multi_site_sites_accessor() {
-        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0], 2, 1).unwrap();
+        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0]).unwrap();
 
         let mut sites = BTreeMap::new();
         sites.insert("a".to_string(), make_observed(5));
@@ -373,15 +336,13 @@ mod tests {
 
     #[test]
     fn multi_site_grid_accessor() {
-        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0], 2, 1).unwrap();
+        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0]).unwrap();
 
         let mut sites = BTreeMap::new();
         sites.insert("x".to_string(), make_observed(5));
         sites.insert("y".to_string(), make_observed(5));
 
         let msd = MultiSiteData::new(sites, grid).unwrap();
-        assert_eq!(msd.grid().nx(), 2);
-        assert_eq!(msd.grid().ny(), 1);
         assert_eq!(msd.grid().n_cells(), 2);
         assert_eq!(msd.grid().lons(), &[1.0, 2.0]);
         assert_eq!(msd.grid().lats(), &[10.0, 20.0]);
@@ -389,7 +350,7 @@ mod tests {
 
     #[test]
     fn multi_site_keys_and_iter() {
-        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0], 2, 1).unwrap();
+        let grid = GridMetadata::new(vec![1.0, 2.0], vec![10.0, 20.0]).unwrap();
 
         let mut sites = BTreeMap::new();
         sites.insert("first".to_string(), make_observed(7));
@@ -413,7 +374,7 @@ mod tests {
 
     #[test]
     fn multi_site_n_timesteps_empty() {
-        let grid = GridMetadata::new(vec![], vec![], 0, 0).unwrap();
+        let grid = GridMetadata::new(vec![], vec![]).unwrap();
         let sites = BTreeMap::new();
 
         let msd = MultiSiteData::new(sites, grid).unwrap();

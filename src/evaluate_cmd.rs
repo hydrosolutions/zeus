@@ -35,7 +35,10 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         "observed data loaded"
     );
 
-    // 3. Enforce single-site (Parquet has no site column)
+    // 3. Enforce site count
+    if multi_site.n_sites() == 0 {
+        bail!("no valid grid cells after filtering missing data");
+    }
     if multi_site.n_sites() > 1 {
         bail!(
             "standalone evaluate requires single-site observed data, got {} sites. \

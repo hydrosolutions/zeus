@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use tracing::{debug, info};
 use zeus_calendar::water_year;
 
 use crate::error::IoError;
@@ -164,11 +165,51 @@ pub fn read_netcdf(path: &Path, config: &ReaderConfig) -> Result<MultiSiteData, 
 
     let trimmed_dates = &dates[start_idx..end_idx];
 
-    // -- Reshape per cell ---------------------------------------------------
+    // -- Expand coordinates before per-cell loop ----------------------------
+
+    // Expand 1-D lon/lat to per-cell arrays if they are 1-D axis arrays.
+    let (cell_lons, cell_lats) = if lons.len() == nx && lats.len() == ny {
+        // 1-D axis arrays: broadcast to a flat grid (row-major: y varies slowest).
+        let mut flat_lons = Vec::with_capacity(n_cells);
+        let mut flat_lats = Vec::with_capacity(n_cells);
+        for lat in &lats {
+            for lon in &lons {
+                flat_lons.push(*lon);
+                flat_lats.push(*lat);
+            }
+        }
+        (flat_lons, flat_lats)
+    } else {
+        // Already per-cell (or some other layout); pass through directly.
+        (lons, lats)
+    };
+
+    // -- Reshape per cell, skipping all-missing cells -----------------------
 
     let mut sites = BTreeMap::new();
+    let mut valid_indices = Vec::new();
 
     for c in 0..n_cells {
+        // Skip cells where all timesteps are NaN for any configured variable.
+        if cell_all_nan(&precip_data, c, n_cells, start_idx, end_idx) {
+            debug!(cell = c, "skipping cell: precipitation all NaN");
+            continue;
+        }
+        if let Some((data, _)) = &tmax_data
+            && cell_all_nan(data, c, n_cells, start_idx, end_idx)
+        {
+            debug!(cell = c, "skipping cell: tmax all NaN");
+            continue;
+        }
+        if let Some((data, _)) = &tmin_data
+            && cell_all_nan(data, c, n_cells, start_idx, end_idx)
+        {
+            debug!(cell = c, "skipping cell: tmin all NaN");
+            continue;
+        }
+
+        valid_indices.push(c);
+
         let mut cell_precip = Vec::with_capacity(end_idx - start_idx);
         let mut cell_tmax: Option<Vec<f64>> = tmax_data
             .as_ref()
@@ -201,27 +242,39 @@ pub fn read_netcdf(path: &Path, config: &ReaderConfig) -> Result<MultiSiteData, 
         sites.insert(key, obs);
     }
 
-    // -- Grid metadata ------------------------------------------------------
+    // -- Log skip summary and check for all-missing -------------------------
 
-    // Expand 1-D lon/lat to per-cell arrays if they are 1-D axis arrays.
-    let (cell_lons, cell_lats) = if lons.len() == nx && lats.len() == ny {
-        // 1-D axis arrays: broadcast to a flat grid (row-major: y varies slowest).
-        let mut flat_lons = Vec::with_capacity(n_cells);
-        let mut flat_lats = Vec::with_capacity(n_cells);
-        for lat in &lats {
-            for lon in &lons {
-                flat_lons.push(*lon);
-                flat_lats.push(*lat);
-            }
-        }
-        (flat_lons, flat_lats)
-    } else {
-        // Already per-cell (or some other layout); pass through directly.
-        (lons, lats)
-    };
+    let n_valid = valid_indices.len();
+    let n_skipped = n_cells - n_valid;
+    if n_skipped > 0 {
+        info!(
+            n_total = n_cells,
+            n_valid, n_skipped, "skipped grid cells with all-missing data"
+        );
+    }
 
-    let grid = GridMetadata::new(cell_lons, cell_lats, nx, ny)?;
+    if n_valid == 0 {
+        return Err(IoError::Validation {
+            count: 1,
+            details: format!("all {n_cells} grid cells contain only missing data"),
+        });
+    }
+
+    // -- Grid metadata (filtered coordinates) -------------------------------
+
+    let valid_lons: Vec<f64> = valid_indices.iter().map(|&i| cell_lons[i]).collect();
+    let valid_lats: Vec<f64> = valid_indices.iter().map(|&i| cell_lats[i]).collect();
+
+    let grid = GridMetadata::new(valid_lons, valid_lats)?;
     MultiSiteData::new(sites, grid)
+}
+
+/// Check if all timesteps for a given cell are NaN.
+///
+/// Data is stored in row-major order: `data[t * n_cells + cell]` gives the
+/// value at timestep `t` for the given `cell` index.
+fn cell_all_nan(data: &[f64], cell: usize, n_cells: usize, start: usize, end: usize) -> bool {
+    (start..end).all(|t| data[t * n_cells + cell].is_nan())
 }
 
 /// Find the first and one-past-last indices that span only complete water years.
@@ -385,5 +438,44 @@ mod tests {
 
         // End should be after last September day
         assert_eq!(dates[e - 1].month(), 9);
+    }
+
+    // -- cell_all_nan -------------------------------------------------------
+
+    #[test]
+    fn cell_all_nan_all_nan_returns_true() {
+        // 3 timesteps, 2 cells — cell 1 is all NaN.
+        let data = [1.0, f64::NAN, 2.0, f64::NAN, 3.0, f64::NAN];
+        assert!(cell_all_nan(&data, 1, 2, 0, 3));
+    }
+
+    #[test]
+    fn cell_all_nan_one_valid_returns_false() {
+        // 3 timesteps, 2 cells — cell 1 has one valid value.
+        let data = [1.0, f64::NAN, 2.0, 5.0, 3.0, f64::NAN];
+        assert!(!cell_all_nan(&data, 1, 2, 0, 3));
+    }
+
+    #[test]
+    fn cell_all_nan_all_valid_returns_false() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert!(!cell_all_nan(&data, 0, 2, 0, 3));
+        assert!(!cell_all_nan(&data, 1, 2, 0, 3));
+    }
+
+    #[test]
+    fn cell_all_nan_multi_cell_isolation() {
+        // 2 timesteps, 3 cells — only cell 1 is all NaN.
+        let data = [1.0, f64::NAN, 3.0, 4.0, f64::NAN, 6.0];
+        assert!(!cell_all_nan(&data, 0, 3, 0, 2));
+        assert!(cell_all_nan(&data, 1, 3, 0, 2));
+        assert!(!cell_all_nan(&data, 2, 3, 0, 2));
+    }
+
+    #[test]
+    fn cell_all_nan_empty_range() {
+        let data = [1.0, 2.0];
+        // Empty range (start == end) should return true (vacuously all NaN).
+        assert!(cell_all_nan(&data, 0, 2, 0, 0));
     }
 }
