@@ -4,6 +4,7 @@ use crate::config::ResampleConfig;
 use crate::error::ResampleError;
 use crate::obs_data::ObsData;
 use crate::result::ResampleResult;
+use tracing::debug_span;
 use zeus_markov::{MarkovConfig, PrecipState};
 
 /// Resamples a single simulated year (365 daily observation indices).
@@ -18,6 +19,7 @@ use zeus_markov::{MarkovConfig, PrecipState};
 /// - `prev_obs_idx` — observation index of the previous day (None for year 1)
 /// - `config` — resampler configuration
 /// - `rng` — random number generator
+#[tracing::instrument(skip(obs, rng), fields(sim_annual_precip, initial_state = ?initial_state))]
 #[allow(clippy::too_many_arguments)]
 pub fn resample_year(
     sim_annual_precip: f64,
@@ -66,6 +68,7 @@ pub fn resample_year(
 /// chaining Markov state and observation index across years.
 ///
 /// Returns a flat `Vec<usize>` of length `sim_annual_precip.len() * 365`.
+#[tracing::instrument(skip(obs, rng), fields(n_years = sim_annual_precip.len()))]
 pub fn resample_dates(
     sim_annual_precip: &[f64],
     obs: &ObsData,
@@ -79,9 +82,10 @@ pub fn resample_dates(
         return Ok(Vec::new());
     }
 
-    if sim_annual_precip.iter().any(|v| !v.is_finite()) {
+    if let Some(idx) = sim_annual_precip.iter().position(|v| !v.is_finite()) {
         return Err(ResampleError::NonFiniteInput {
             field: "sim_annual_precip",
+            first_bad_index: Some(idx),
         });
     }
 
@@ -89,7 +93,8 @@ pub fn resample_dates(
     let mut prev_obs_idx: Option<usize> = None;
     let mut all_indices = Vec::with_capacity(sim_annual_precip.len() * 365);
 
-    for &sim_precip in sim_annual_precip {
+    for (year_idx, &sim_precip) in sim_annual_precip.iter().enumerate() {
+        let _yr = debug_span!("year", idx = year_idx, target_precip = sim_precip).entered();
         let result = resample_year(
             sim_precip,
             obs,
@@ -98,7 +103,15 @@ pub fn resample_dates(
             prev_obs_idx,
             config,
             rng,
-        )?;
+        )
+        .map_err(|e| match e {
+            ResampleError::NoCandidates { day, month, .. } => ResampleError::NoCandidates {
+                day,
+                month,
+                year: Some(year_idx),
+            },
+            other => other,
+        })?;
         all_indices.extend_from_slice(result.indices());
         state = result.final_state();
         prev_obs_idx = Some(result.last_obs_idx());
@@ -260,7 +273,8 @@ mod tests {
         assert!(matches!(
             result,
             Err(ResampleError::NonFiniteInput {
-                field: "sim_annual_precip"
+                field: "sim_annual_precip",
+                ..
             })
         ));
     }

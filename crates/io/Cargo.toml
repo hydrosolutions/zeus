@@ -9,7 +9,7 @@ chrono = { version = "0.4", default-features = false }
 netcdf = { version = "0.12", default-features = false, features = ["static"] }
 parquet = { version = "57", default-features = false, features = ["arrow", "snap", "zstd"] }
 thiserror = "2"
-tracing = "0.1"
+tracing.workspace = true
 zeus-calendar = { path = "../calendar" }
 
 [dev-dependencies]

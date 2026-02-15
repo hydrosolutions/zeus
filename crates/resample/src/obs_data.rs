@@ -79,11 +79,17 @@ impl ObsData {
                 got: obs_water_years.len(),
             });
         }
-        if obs_precip.iter().any(|v| !v.is_finite()) {
-            return Err(ResampleError::NonFiniteInput { field: "precip" });
+        if let Some(idx) = obs_precip.iter().position(|v| !v.is_finite()) {
+            return Err(ResampleError::NonFiniteInput {
+                field: "precip",
+                first_bad_index: Some(idx),
+            });
         }
-        if obs_temp.iter().any(|v| !v.is_finite()) {
-            return Err(ResampleError::NonFiniteInput { field: "temp" });
+        if let Some(idx) = obs_temp.iter().position(|v| !v.is_finite()) {
+            return Err(ResampleError::NonFiniteInput {
+                field: "temp",
+                first_bad_index: Some(idx),
+            });
         }
         for &m in obs_months {
             if !(1..=12).contains(&m) {
@@ -279,7 +285,10 @@ mod tests {
         let result = ObsData::new(&[f64::NAN], &[1.0], &[1], &[1], &[2000]);
         assert!(matches!(
             result,
-            Err(ResampleError::NonFiniteInput { field: "precip" })
+            Err(ResampleError::NonFiniteInput {
+                field: "precip",
+                ..
+            })
         ));
     }
 
@@ -288,7 +297,7 @@ mod tests {
         let result = ObsData::new(&[1.0], &[f64::INFINITY], &[1], &[1], &[2000]);
         assert!(matches!(
             result,
-            Err(ResampleError::NonFiniteInput { field: "temp" })
+            Err(ResampleError::NonFiniteInput { field: "temp", .. })
         ));
     }
 

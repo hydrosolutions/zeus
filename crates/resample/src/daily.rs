@@ -5,6 +5,7 @@ use crate::error::ResampleError;
 use crate::obs_data::ObsData;
 use crate::result::ResampleResult;
 use crate::year_subset::YearSubset;
+use tracing::{debug, trace_span};
 use zeus_calendar::expand_indices;
 use zeus_knn::{KnnConfig, KnnScratch, k_lall_sharma, knn_sample_with_scratch};
 use zeus_markov::{PrecipState, simulate_states};
@@ -18,6 +19,7 @@ use zeus_markov::{PrecipState, simulate_states};
 /// 4. Wide +/-30: transition match -> KNN -> assign day1 successor
 /// 5. Relaxed: any same-month day, no transition -> uniform sample day0
 /// 6. Calendar-year safeguard: pre/post-KNN water-year filtering
+#[tracing::instrument(skip(subset, obs, sim_months, sim_days, config, rng), fields(n_days = sim_months.len()))]
 #[allow(dead_code, clippy::too_many_arguments)]
 pub(crate) fn resample_days(
     subset: &YearSubset,
@@ -74,6 +76,7 @@ pub(crate) fn resample_days(
         .ok_or(ResampleError::NoCandidates {
             day: 0,
             month: sim_months[0],
+            year: None,
         })?;
 
     let day1_global = subset.to_global(day1_local);
@@ -102,6 +105,7 @@ pub(crate) fn resample_days(
 
     // === Days 2..365 ===
     for d in 1..n_days {
+        let _day = trace_span!("day", d, month = sim_months[d]).entered();
         let month = sim_months[d];
         let day = sim_days[d];
 
@@ -111,6 +115,7 @@ pub(crate) fn resample_days(
             let mc = subset.month_candidates(month);
             if mc.is_empty() {
                 // L1 Carry-forward fallback: no month candidates at all.
+                debug!(day = d, level = 1, "carry-forward: no candidates for month");
                 output[d] = output[d - 1];
                 prev_precip = obs.precip()[output[d]];
                 prev_temp = obs.temp()[output[d]];
@@ -126,6 +131,11 @@ pub(crate) fn resample_days(
 
         if expanded_narrow.is_empty() {
             // L2 Empty window fallback: uniform sample day0, assign day0 values.
+            debug!(
+                day = d,
+                level = 2,
+                "empty window: uniform from base candidates"
+            );
             let &chosen = base_candidates
                 .choose(rng)
                 .expect("base_candidates non-empty");
@@ -143,12 +153,14 @@ pub(crate) fn resample_days(
 
         if matches.is_empty() {
             // L4 Wide window with transition match.
+            debug!(day = d, level = 4, "narrow window miss: trying wide window");
             let expanded_wide = expand_indices(&base_candidates, &wide_offsets, n_max);
             matches = match_transitions(&expanded_wide, state_from, state_to, subset);
         }
 
         if matches.is_empty() {
             // L5 Relaxed fallback: any same-month day with valid successor.
+            debug!(day = d, level = 5, "wide window miss: relaxed fallback");
             let mut fb: Vec<usize> = (0..subset_len.saturating_sub(1))
                 .filter(|&i| subset.month_at(i) == month)
                 .collect();

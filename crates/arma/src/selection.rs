@@ -1,5 +1,7 @@
 //! AIC-based ARMA model order selection.
 
+use tracing::{debug, trace_span};
+
 use crate::error::ArmaError;
 use crate::fit::ArmaFit;
 use crate::spec::ArmaSpec;
@@ -25,15 +27,18 @@ use crate::spec::ArmaSpec;
 /// let best = select_best_aic(&data, 3, 2)?;
 /// println!("Best order: {:?}, AIC = {}", best.order(), best.aic());
 /// ```
+#[tracing::instrument(skip(data), fields(n = data.len(), max_p, max_q))]
 pub fn select_best_aic(data: &[f64], max_p: usize, max_q: usize) -> Result<ArmaFit, ArmaError> {
     let mut best: Option<ArmaFit> = None;
 
     for p in 0..=max_p {
         for q in 0..=max_q {
+            let _candidate = trace_span!("arma_candidate", p, q).entered();
             match ArmaSpec::new(p, q).fit(data) {
                 Ok(fit) => {
                     let dominated = best.as_ref().is_some_and(|b| b.aic() <= fit.aic());
                     if !dominated {
+                        debug!(p, q, aic = fit.aic(), "new best candidate");
                         best = Some(fit);
                     }
                 }

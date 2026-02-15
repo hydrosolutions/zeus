@@ -1,7 +1,7 @@
 //! Perturb command: apply climate perturbations to synthetic Parquet data.
 
 use anyhow::{Context, Result, bail};
-use tracing::info;
+use tracing::{debug_span, info, info_span};
 
 use zeus_io::{OwnedSyntheticWeather, SyntheticWeather, WriterConfig, read_parquet, write_parquet};
 use zeus_perturb::apply_perturbations;
@@ -12,6 +12,7 @@ use crate::convert;
 
 /// Run the perturbation pipeline.
 pub fn run(args: PerturbArgs) -> Result<()> {
+    let _cmd = info_span!("perturb").entered();
     // 1. Validate: at least one perturbation source must be provided
     if args.config.is_none() && args.temp_delta.is_none() && args.precip_factor.is_none() {
         bail!("no perturbation specified: provide --config, --temp-delta, or --precip-factor");
@@ -74,6 +75,7 @@ pub fn run(args: PerturbArgs) -> Result<()> {
 
     // 7. Apply perturbations to each realisation
     for owned in &mut realisations {
+        let _real = debug_span!("realisation", idx = owned.realisation).entered();
         apply_to_realisation(owned, &perturb_cfg)?;
     }
     info!("perturbations applied to all realisations");

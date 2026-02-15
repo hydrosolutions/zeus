@@ -2,6 +2,7 @@
 
 use crate::config::QmConfig;
 use crate::gamma::GammaParams;
+use tracing::{debug, debug_span};
 
 /// Result of fitting Gamma distributions to monthly precipitation data.
 ///
@@ -119,12 +120,14 @@ fn count_unique(values: &[f64]) -> usize {
 /// For each calendar month (1..=12), collects wet-day values that exceed
 /// `config.intensity_threshold()`, then fits a Gamma distribution via
 /// method-of-moments if enough events are present.
+#[tracing::instrument(skip(precip, month), fields(n_obs = precip.len()))]
 pub fn fit_monthly(precip: &[f64], month: &[u8], config: &QmConfig) -> BaselineFit {
     let mut params: [Option<GammaParams>; 12] = [None; 12];
     let mut skipped_months = Vec::new();
     let mut n_failed_fits = 0usize;
 
     for m in 1u8..=12 {
+        let _month = debug_span!("fit_month", month = m).entered();
         let wet_values: Vec<f64> = precip
             .iter()
             .zip(month.iter())
@@ -133,6 +136,12 @@ pub fn fit_monthly(precip: &[f64], month: &[u8], config: &QmConfig) -> BaselineF
             .collect();
 
         if wet_values.len() < config.min_events() {
+            debug!(
+                month = m,
+                n_wet = wet_values.len(),
+                min = config.min_events(),
+                "insufficient wet days: skipping"
+            );
             skipped_months.push(m);
             params[(m - 1) as usize] = None;
         } else {
@@ -141,6 +150,7 @@ pub fn fit_monthly(precip: &[f64], month: &[u8], config: &QmConfig) -> BaselineF
                     params[(m - 1) as usize] = Some(gp);
                 }
                 None => {
+                    debug!(month = m, "gamma fit failed: skipping");
                     n_failed_fits += 1;
                     skipped_months.push(m);
                     params[(m - 1) as usize] = None;

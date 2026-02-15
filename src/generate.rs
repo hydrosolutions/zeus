@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use tracing::info;
+use tracing::{debug_span, info, info_span};
 
 use zeus_calendar::{NoLeapDate, noleap_sequence};
 use zeus_evaluate::{MultiSiteSynthetic, evaluate};
@@ -17,6 +17,7 @@ use crate::convert;
 
 /// Run the full generation pipeline.
 pub fn run(args: GenerateArgs) -> Result<()> {
+    let _cmd = info_span!("generate").entered();
     let toml_str = std::fs::read_to_string(&args.config)
         .with_context(|| format!("failed to read config file: {}", args.config.display()))?;
     let mut config: ZeusConfig =
@@ -73,12 +74,12 @@ pub fn run(args: GenerateArgs) -> Result<()> {
 
     // Step 5: For each site
     for (site_key, obs) in multi_site.iter() {
-        info!(site = %site_key, "processing site");
+        let _site = info_span!("site", name = %site_key).entered();
+        info!("processing site");
 
         // 5a: Compute annual precip (group daily precip by water year, sum)
         let annual_precip = compute_annual_precip(obs.precip(), obs.water_years());
         info!(
-            site = %site_key,
             n_years = annual_precip.len(),
             "computed annual precipitation"
         );
@@ -86,20 +87,12 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         // 5b: WARM simulation
         let warm_result = simulate_warm(&annual_precip, &warm_cfg)
             .with_context(|| format!("WARM simulation failed for site {site_key}"))?;
-        info!(
-            site = %site_key,
-            n_sim = warm_result.n_sim(),
-            "WARM simulation complete"
-        );
+        info!(n_sim = warm_result.n_sim(), "WARM simulation complete");
 
         // 5c: Filter WARM pool
         let filtered = filter_warm_pool(&annual_precip, &warm_result, &bounds)
             .with_context(|| format!("WARM filtering failed for site {site_key}"))?;
-        info!(
-            site = %site_key,
-            n_selected = filtered.n_selected(),
-            "filtered WARM pool"
-        );
+        info!(n_selected = filtered.n_selected(), "filtered WARM pool");
 
         // 5d: Bridge observed data for resampling
         let obs_data = bridge_obs(obs)?;
@@ -107,6 +100,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         // 5e: For each selected realisation, resample daily data
         let mut site_reals = Vec::new();
         for (real_idx, &sim_idx) in filtered.selected().iter().enumerate() {
+            let _real = debug_span!("realisation", idx = real_idx, sim = sim_idx).entered();
             let sim_annual = warm_result.simulations()[sim_idx].as_slice();
             let n_sim_years = sim_annual.len();
 
@@ -128,7 +122,8 @@ pub fn run(args: GenerateArgs) -> Result<()> {
 
             // Generate calendar metadata for synthetic period
             // n_sim_years * 365 days (no-leap calendar)
-            let start_date = NoLeapDate::new(1, 1, 1).context("failed to create start date")?;
+            let start_date = NoLeapDate::new(1, config.io.start_month, 1)
+                .context("failed to create start date")?;
             let n_days = n_sim_years * 365;
             let syn_dates = noleap_sequence(start_date, n_days);
             let syn_months: Vec<u8> = syn_dates.iter().map(|d| d.month()).collect();

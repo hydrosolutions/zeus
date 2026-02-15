@@ -492,6 +492,7 @@ fn rank_and_select(
 /// | Variant | Trigger |
 /// |---------|---------|
 /// | [`WarmError::InsufficientSimulations`] | pool is empty |
+#[tracing::instrument(skip(observed, result, bounds), fields(n_simulations = result.simulations().len(), n_select = bounds.n_select()))]
 pub fn filter_warm_pool(
     observed: &[f64],
     result: &WarmResult,

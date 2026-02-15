@@ -28,10 +28,12 @@ pub enum ResampleError {
     },
 
     /// Returned when input contains NaN or infinity.
-    #[error("non-finite value in {field}")]
+    #[error("non-finite value in {field} at index {first_bad_index:?}")]
     NonFiniteInput {
         /// Name of the field containing the non-finite value.
         field: &'static str,
+        /// Index of the first non-finite element, if known.
+        first_bad_index: Option<usize>,
     },
 
     /// Returned when configuration is invalid.
@@ -42,12 +44,14 @@ pub enum ResampleError {
     },
 
     /// Returned when no candidates found after all fallbacks.
-    #[error("no candidates for day {day} in month {month}")]
+    #[error("no candidates for day {day} in month {month} (year {year:?})")]
     NoCandidates {
         /// Day index in the year (0-based).
         day: usize,
         /// Calendar month (1-indexed).
         month: u8,
+        /// Simulation year index (0-based), if known.
+        year: Option<usize>,
     },
 
     /// Returned when a month value is invalid.
@@ -101,8 +105,14 @@ mod tests {
 
     #[test]
     fn display_non_finite() {
-        let e = ResampleError::NonFiniteInput { field: "precip" };
-        assert_eq!(e.to_string(), "non-finite value in precip");
+        let e = ResampleError::NonFiniteInput {
+            field: "precip",
+            first_bad_index: Some(42),
+        };
+        assert_eq!(
+            e.to_string(),
+            "non-finite value in precip at index Some(42)"
+        );
     }
 
     #[test]
@@ -115,8 +125,15 @@ mod tests {
 
     #[test]
     fn display_no_candidates() {
-        let e = ResampleError::NoCandidates { day: 5, month: 3 };
-        assert_eq!(e.to_string(), "no candidates for day 5 in month 3");
+        let e = ResampleError::NoCandidates {
+            day: 5,
+            month: 3,
+            year: Some(2),
+        };
+        assert_eq!(
+            e.to_string(),
+            "no candidates for day 5 in month 3 (year Some(2))"
+        );
     }
 
     #[test]

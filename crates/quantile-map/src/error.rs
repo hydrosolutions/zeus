@@ -67,8 +67,11 @@ pub enum QuantileMapError {
     },
 
     /// Returned when no months had sufficient data for gamma fitting.
-    #[error("no months had sufficient data for gamma fitting")]
-    NoFittableMonths,
+    #[error("no months had sufficient data for gamma fitting (skipped: {skipped_months:?})")]
+    NoFittableMonths {
+        /// Calendar months (1-indexed) that were skipped during fitting.
+        skipped_months: Vec<u8>,
+    },
 }
 
 #[cfg(test)]
@@ -150,10 +153,12 @@ mod tests {
 
     #[test]
     fn error_no_fittable_months() {
-        let e = QuantileMapError::NoFittableMonths;
+        let e = QuantileMapError::NoFittableMonths {
+            skipped_months: vec![1, 2, 3],
+        };
         assert_eq!(
             e.to_string(),
-            "no months had sufficient data for gamma fitting"
+            "no months had sufficient data for gamma fitting (skipped: [1, 2, 3])"
         );
     }
 

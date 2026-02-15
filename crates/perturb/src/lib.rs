@@ -34,6 +34,7 @@ pub use zeus_quantile_map::{
 
 use rand::SeedableRng;
 use std::collections::BTreeSet;
+use tracing::debug;
 
 /// Builds a seeded or OS-sourced RNG.
 fn make_rng(seed: Option<u64>) -> rand::rngs::StdRng {
@@ -90,6 +91,7 @@ fn get_or_fit_baseline(
 ///
 /// Returns [`PerturbError`] on invalid inputs, configuration problems,
 /// or failures from underlying modules.
+#[tracing::instrument(skip(precip, temp, temp_min, temp_max, month, year, config))]
 pub fn apply_perturbations(
     precip: &[f64],
     temp: &[f64],
@@ -142,6 +144,7 @@ pub fn apply_perturbations(
         let deltas = TempDeltas::from_config(temp_config, n_years)?;
         let tr = adjust_temperature(temp, Some(temp_min), Some(temp_max), month, year, &deltas)?;
         modules.temperature = true;
+        debug!(module = "temperature", "applied");
         let tmin = tr.temp_min().map(|s| s.to_vec());
         let tmax = tr.temp_max().map(|s| s.to_vec());
         (tr.into_temp(), tmin, tmax)
@@ -166,6 +169,7 @@ pub fn apply_perturbations(
         adj_precip = qr.adjusted().to_vec();
         qm_result = Some(qr);
         modules.quantile_map = true;
+        debug!(module = "quantile_map", "applied");
     } else {
         adj_precip = precip.to_vec();
         qm_result = None;
@@ -178,6 +182,7 @@ pub fn apply_perturbations(
             adjust_occurrence(&adj_precip, month, year, &baseline, occ_config, &mut rng)?;
         adj_precip = occ_result.into_precip();
         modules.occurrence = true;
+        debug!(module = "occurrence", "applied");
     }
 
     // --- Step 4: Safety Rails ---

@@ -8,6 +8,7 @@ zeus-quantile-map = { path = "../quantile-map" }
 thiserror = "2"
 rand = "0.9"
 rand_distr = "0.5"
+tracing.workspace = true
 
 [dev-dependencies]
 approx = "0.5"

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
-use tracing::info;
+use tracing::{info, info_span};
 
 use zeus_evaluate::{MultiSiteSynthetic, evaluate};
 use zeus_io::{SyntheticWeather, read_netcdf, read_parquet};
@@ -14,6 +14,7 @@ use crate::convert;
 
 /// Run the standalone evaluation pipeline.
 pub fn run(args: EvaluateArgs) -> Result<()> {
+    let _cmd = info_span!("evaluate").entered();
     // 1. Load project TOML
     let toml_str = std::fs::read_to_string(&args.config)
         .with_context(|| format!("failed to read config file: {}", args.config.display()))?;

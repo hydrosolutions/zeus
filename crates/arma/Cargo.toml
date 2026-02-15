@@ -11,6 +11,7 @@ rand = "0.9"
 rand_distr = "0.5"
 thiserror = "2"
 zeus-stats = { path = "../stats" }
+tracing.workspace = true
 
 [dev-dependencies]
 approx = "0.5"

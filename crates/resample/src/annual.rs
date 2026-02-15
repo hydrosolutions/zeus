@@ -9,6 +9,7 @@ use zeus_knn::{KnnConfig, knn_sample};
 ///
 /// Returns indices into `obs.unique_water_years()` / `obs.annual_precip()`.
 /// May contain duplicates (with-replacement sampling).
+#[tracing::instrument(skip(obs, config, rng), fields(target = sim_precip))]
 #[allow(dead_code)]
 pub(crate) fn select_annual_years(
     sim_precip: f64,

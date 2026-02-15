@@ -7,6 +7,7 @@ use zeus_wavelet::{MraConfig, TimeSeries, mra};
 
 use crate::bootstrap::{block_bootstrap, is_arma_viable};
 use crate::error::WarmError;
+use tracing::{debug, debug_span};
 use zeus_stats::{mean, sd};
 
 /// Configuration for a WARM simulation.
@@ -202,6 +203,7 @@ fn variance_match(sims: &mut [Vec<f64>], target_mean: f64, target_sd: f64, var_t
 /// | [`WarmError::Wavelet`] | MRA decomposition fails |
 /// | [`WarmError::Arma`] | ARMA fitting fails for all components |
 /// | [`WarmError::NoComponentsToSimulate`] | MRA produces zero components |
+#[tracing::instrument(skip(data, config), fields(n = data.len(), n_sim = config.n_sim(), n_years = config.n_years()))]
 pub fn simulate_warm(data: &[f64], config: &WarmConfig) -> Result<WarmResult, WarmError> {
     let n_sim = config.n_sim();
     let n_years = config.n_years();
@@ -222,6 +224,7 @@ pub fn simulate_warm(data: &[f64], config: &WarmConfig) -> Result<WarmResult, Wa
         let bq = max_q.min(2);
 
         if !is_arma_viable(data, bp, bq) {
+            debug!("bypass mode: ARMA not viable, falling back to block bootstrap");
             // Bootstrap fallback on original data
             let sims = block_bootstrap(data, n_years, n_sim, &mut rng);
             return Ok(WarmResult::new(sims, vec![(0, 0)], vec![true]));
@@ -240,7 +243,8 @@ pub fn simulate_warm(data: &[f64], config: &WarmConfig) -> Result<WarmResult, Wa
                 let order = fit.order();
                 Ok(WarmResult::new(sims, vec![order], vec![false]))
             }
-            Err(_) => {
+            Err(e) => {
+                debug!(error = %e, "bypass mode: ARMA fitting failed, falling back to block bootstrap");
                 let sims = block_bootstrap(data, n_years, n_sim, &mut rng);
                 Ok(WarmResult::new(sims, vec![(0, 0)], vec![true]))
             }
@@ -263,6 +267,13 @@ pub fn simulate_warm(data: &[f64], config: &WarmConfig) -> Result<WarmResult, Wa
 
         // Iterate over components: details 0..n_details, then smooth
         for comp_idx in 0..n_components {
+            let comp_type = if comp_idx < n_details {
+                "detail"
+            } else {
+                "smooth"
+            };
+            let _comp = debug_span!("component", idx = comp_idx, kind = comp_type).entered();
+
             let component: &[f64] = if comp_idx < n_details {
                 mra_result.detail(comp_idx).expect("detail level exists")
             } else {
@@ -274,6 +285,7 @@ pub fn simulate_warm(data: &[f64], config: &WarmConfig) -> Result<WarmResult, Wa
 
             // Constant component
             if comp_sd < 1e-10 {
+                debug!(sd = comp_sd, "constant component: skipping ARMA");
                 for sim in total_sims.iter_mut() {
                     for val in sim.iter_mut() {
                         *val += comp_mean;
@@ -297,6 +309,7 @@ pub fn simulate_warm(data: &[f64], config: &WarmConfig) -> Result<WarmResult, Wa
             };
 
             if !is_arma_viable(&centered, cp, cq) {
+                debug!("ARMA not viable: falling back to block bootstrap");
                 // Bootstrap on original (non-centered) component
                 let comp_sims = block_bootstrap(component, n_years, n_sim, &mut rng);
                 for (sim, comp_sim) in total_sims.iter_mut().zip(comp_sims.iter()) {
@@ -327,7 +340,8 @@ pub fn simulate_warm(data: &[f64], config: &WarmConfig) -> Result<WarmResult, Wa
                     component_orders.push(order);
                     bootstrap_fallbacks.push(false);
                 }
-                Err(_) => {
+                Err(e) => {
+                    debug!(error = %e, "ARMA fitting failed: falling back to block bootstrap");
                     // ARMA fitting failed, fall back to bootstrap
                     let comp_sims = block_bootstrap(component, n_years, n_sim, &mut rng);
                     for (sim, comp_sim) in total_sims.iter_mut().zip(comp_sims.iter()) {

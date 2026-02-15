@@ -126,6 +126,7 @@ fn validate_inputs(
 /// # Errors
 ///
 /// Returns [`QuantileMapError`] on invalid inputs or if no months can be fitted.
+#[tracing::instrument(skip(precip, month, year, mean_factors, var_factors, config))]
 pub fn adjust_precipitation(
     precip: &[f64],
     month: &[u8],
@@ -140,7 +141,9 @@ pub fn adjust_precipitation(
     let baseline = fit::fit_monthly(precip, month, config);
 
     if baseline.is_empty() {
-        return Err(QuantileMapError::NoFittableMonths);
+        return Err(QuantileMapError::NoFittableMonths {
+            skipped_months: baseline.skipped_months().to_vec(),
+        });
     }
 
     let target_params = target::compute_target_params(&baseline, mean_factors, var_factors, config);

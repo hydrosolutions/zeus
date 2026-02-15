@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 thiserror = "2"
+tracing.workspace = true
 
 [dev-dependencies]
 approx = "0.5"

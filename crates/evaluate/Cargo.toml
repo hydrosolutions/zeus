@@ -9,6 +9,7 @@ zeus-stats = { path = "../stats" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tracing.workspace = true
 
 [dev-dependencies]
 approx = "0.5"

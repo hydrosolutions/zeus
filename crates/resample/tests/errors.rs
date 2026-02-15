@@ -112,7 +112,10 @@ fn error_non_finite_precip() {
     let result = ObsData::new(&[f64::NAN], &[1.0], &[1], &[1], &[2000]);
     assert!(matches!(
         result,
-        Err(ResampleError::NonFiniteInput { field: "precip" })
+        Err(ResampleError::NonFiniteInput {
+            field: "precip",
+            ..
+        })
     ));
 }
 
@@ -121,7 +124,7 @@ fn error_non_finite_temp() {
     let result = ObsData::new(&[1.0], &[f64::INFINITY], &[1], &[1], &[2000]);
     assert!(matches!(
         result,
-        Err(ResampleError::NonFiniteInput { field: "temp" })
+        Err(ResampleError::NonFiniteInput { field: "temp", .. })
     ));
 }
 
@@ -138,7 +141,8 @@ fn error_non_finite_sim_precip() {
     assert!(matches!(
         result,
         Err(ResampleError::NonFiniteInput {
-            field: "sim_annual_precip"
+            field: "sim_annual_precip",
+            ..
         })
     ));
 }

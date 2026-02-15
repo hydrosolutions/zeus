@@ -9,6 +9,7 @@ mod scoring;
 mod timeseries;
 
 use std::collections::BTreeMap;
+use tracing::{debug, debug_span, trace_span};
 use zeus_io::MultiSiteData;
 
 pub use config::EvaluateConfig;
@@ -30,6 +31,7 @@ pub use output::{
 /// Returns [`EvaluateError::Validation`] if site keys don't match between
 /// observed and synthetic data.
 /// Returns [`EvaluateError::Serialization`] if JSON serialization fails.
+#[tracing::instrument(skip(observed, synthetic), fields(n_sites = observed.n_sites()))]
 pub fn evaluate(
     observed: &MultiSiteData,
     synthetic: &MultiSiteSynthetic<'_>,
@@ -90,17 +92,26 @@ pub fn evaluate(
     for site in observed.keys() {
         let obs = match observed.get(site) {
             Some(o) => o,
-            None => continue,
+            None => {
+                debug!(site = %site, "skipping: not in observed");
+                continue;
+            }
         };
         let syn_realisations = match synthetic.get(site) {
             Some(s) => s,
-            None => continue,
+            None => {
+                debug!(site = %site, "skipping: not in synthetic");
+                continue;
+            }
         };
+
+        let _site = debug_span!("eval_site", name = %site).entered();
 
         let mut site_map: BTreeMap<String, BTreeMap<String, output::TimeseriesComparison>> =
             BTreeMap::new();
 
         for month in 1..=12 {
+            let _month = trace_span!("month", m = month).entered();
             let month_str = format!("{:02}", month);
             let mut month_map: BTreeMap<String, output::TimeseriesComparison> = BTreeMap::new();
 
