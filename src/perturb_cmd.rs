@@ -52,8 +52,9 @@ pub fn run(args: PerturbArgs) -> Result<()> {
 
     // 4. Read base Parquet
     info!(path = %args.input.display(), "reading synthetic data");
-    let mut realisations = read_parquet(&args.input)
+    let site_map = read_parquet(&args.input)
         .with_context(|| format!("failed to read Parquet: {}", args.input.display()))?;
+    let mut realisations: Vec<OwnedSyntheticWeather> = site_map.into_values().flatten().collect();
     info!(n = realisations.len(), "loaded realisations");
 
     if realisations.is_empty() {
@@ -62,7 +63,7 @@ pub fn run(args: PerturbArgs) -> Result<()> {
 
     // 5. Determine n_years from first realisation
     let n_days = realisations[0].len();
-    if n_days == 0 || n_days % 365 != 0 {
+    if n_days == 0 || !n_days.is_multiple_of(365) {
         bail!(
             "realisation length {} is not a multiple of 365 — cannot determine n_years",
             n_days

@@ -336,20 +336,20 @@ fn trim_range(
 
 /// Read synthetic weather data from a Parquet file.
 ///
-/// Returns one [`OwnedSyntheticWeather`] per realisation found in the file,
-/// sorted by realisation index.
+/// Returns a map from site name to a vector of [`OwnedSyntheticWeather`]
+/// realisations, sorted by realisation index within each site.
 ///
 /// # Errors
 ///
 /// Returns [`IoError::FileNotFound`] if the file does not exist, or
 /// [`IoError::Parquet`] / [`IoError::Validation`] on format errors.
-pub fn read_parquet(path: &Path) -> Result<Vec<OwnedSyntheticWeather>, IoError> {
+pub fn read_parquet(path: &Path) -> Result<BTreeMap<String, Vec<OwnedSyntheticWeather>>, IoError> {
     let batches = parquet_read::read_batches(path)?;
     if batches.is_empty() {
-        return Ok(Vec::new());
+        return Ok(BTreeMap::new());
     }
-    let has_temp = parquet_read::validate_schema(&batches[0])?;
-    parquet_read::group_by_realisation(&batches, has_temp)
+    let info = parquet_read::validate_schema(&batches[0])?;
+    parquet_read::group_by_site_and_realisation(&batches, info.has_temp, info.has_site)
 }
 
 // ---------------------------------------------------------------------------

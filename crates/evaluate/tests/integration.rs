@@ -72,6 +72,7 @@ fn test_evaluate_full_pipeline() {
     let syn_temp_max_b1: Vec<f64> = (0..60).map(|i| 19.0 + (i % 8) as f64).collect();
 
     let syn_a0 = SyntheticWeather::new(
+        "site_a",
         &syn_precip_a0,
         Some(&syn_temp_max_a0),
         None,
@@ -83,6 +84,7 @@ fn test_evaluate_full_pipeline() {
     .unwrap();
 
     let syn_a1 = SyntheticWeather::new(
+        "site_a",
         &syn_precip_a1,
         Some(&syn_temp_max_a1),
         None,
@@ -94,6 +96,7 @@ fn test_evaluate_full_pipeline() {
     .unwrap();
 
     let syn_b0 = SyntheticWeather::new(
+        "site_b",
         &syn_precip_b0,
         Some(&syn_temp_max_b0),
         None,
@@ -105,6 +108,7 @@ fn test_evaluate_full_pipeline() {
     .unwrap();
 
     let syn_b1 = SyntheticWeather::new(
+        "site_b",
         &syn_precip_b1,
         Some(&syn_temp_max_b1),
         None,
@@ -221,6 +225,7 @@ fn test_evaluate_mismatched_sites_error() {
     let days_of_year: Vec<u16> = (1..=30).collect();
 
     let syn = SyntheticWeather::new(
+        "site_b",
         &precip,
         Some(&temp_max),
         None,

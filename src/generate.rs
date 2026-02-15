@@ -124,7 +124,13 @@ pub fn run(args: GenerateArgs) -> Result<()> {
 
         // Distribute shared indices to each site
         for (site_key, obs) in multi_site.iter() {
-            let weather = extract_site_weather(&shared_indices, obs, &calendar, real_idx as u32);
+            let weather = extract_site_weather(
+                &shared_indices,
+                obs,
+                &calendar,
+                real_idx as u32,
+                site_key.clone(),
+            );
             site_synthetics.get_mut(site_key).unwrap().push(weather);
         }
     }
@@ -313,6 +319,7 @@ fn extract_site_weather(
     obs: &zeus_io::ObservedData,
     calendar: &SyntheticCalendar,
     realisation: u32,
+    site: String,
 ) -> OwnedSyntheticWeather {
     let syn_precip: Vec<f64> = indices.iter().map(|&i| obs.precip()[i]).collect();
     let syn_tmax: Option<Vec<f64>> = obs
@@ -323,6 +330,7 @@ fn extract_site_weather(
         .map(|t| indices.iter().map(|&i| t[i]).collect());
 
     OwnedSyntheticWeather {
+        site,
         precip: syn_precip,
         temp_max: syn_tmax,
         temp_min: syn_tmin,
@@ -439,8 +447,9 @@ mod tests {
             water_years: vec![1, 1, 1],
             days_of_year: vec![1, 2, 3],
         };
-        let weather = extract_site_weather(&indices, &obs, &cal, 0);
+        let weather = extract_site_weather(&indices, &obs, &cal, 0, "test_site".to_string());
 
+        assert_eq!(weather.site, "test_site");
         assert_eq!(weather.precip, vec![30.0, 10.0, 50.0]);
         assert_eq!(weather.temp_max.as_ref().unwrap(), &vec![27.0, 25.0, 29.0]);
         assert_eq!(weather.temp_min.as_ref().unwrap(), &vec![17.0, 15.0, 19.0]);

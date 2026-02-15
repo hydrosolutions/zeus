@@ -9,6 +9,8 @@ use crate::synthetic::SyntheticWeather;
 /// read from Parquet and must outlive the Arrow record batches.
 #[derive(Debug, Clone)]
 pub struct OwnedSyntheticWeather {
+    /// Site identifier.
+    pub site: String,
     /// Synthetic precipitation values.
     pub precip: Vec<f64>,
     /// Optional synthetic maximum temperature values.
@@ -33,7 +35,9 @@ impl OwnedSyntheticWeather {
     ///
     /// Returns [`IoError::Validation`] if any vector length differs from
     /// `precip.len()`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        site: String,
         precip: Vec<f64>,
         temp_max: Option<Vec<f64>>,
         temp_min: Option<Vec<f64>>,
@@ -97,6 +101,7 @@ impl OwnedSyntheticWeather {
         }
 
         Ok(Self {
+            site,
             precip,
             temp_max,
             temp_min,
@@ -115,6 +120,7 @@ impl OwnedSyntheticWeather {
     /// [`SyntheticWeather::new`] validation fails.
     pub fn as_view(&self) -> Result<SyntheticWeather<'_>, IoError> {
         SyntheticWeather::new(
+            &self.site,
             &self.precip,
             self.temp_max.as_deref(),
             self.temp_min.as_deref(),
@@ -123,6 +129,11 @@ impl OwnedSyntheticWeather {
             &self.days_of_year,
             self.realisation,
         )
+    }
+
+    /// Returns the site identifier.
+    pub fn site(&self) -> &str {
+        &self.site
     }
 
     /// Returns the synthetic precipitation slice.
@@ -178,6 +189,7 @@ mod tests {
     #[test]
     fn construction_with_all_fields() {
         let osw = OwnedSyntheticWeather::new(
+            "test_site".to_string(),
             vec![1.0, 2.0, 3.0],
             Some(vec![30.0, 31.0, 32.0]),
             Some(vec![10.0, 11.0, 12.0]),
@@ -196,6 +208,7 @@ mod tests {
     #[test]
     fn construction_without_temperatures() {
         let osw = OwnedSyntheticWeather::new(
+            "test_site".to_string(),
             vec![0.5, 1.5],
             None,
             None,
@@ -216,6 +229,7 @@ mod tests {
     #[test]
     fn length_mismatch_returns_error() {
         let result = OwnedSyntheticWeather::new(
+            "test_site".to_string(),
             vec![1.0, 2.0, 3.0],
             Some(vec![30.0, 31.0]), // wrong length
             None,
@@ -239,6 +253,7 @@ mod tests {
     #[test]
     fn accessor_values() {
         let osw = OwnedSyntheticWeather::new(
+            "test_site".to_string(),
             vec![5.0, 10.0],
             Some(vec![25.0, 26.0]),
             Some(vec![8.0, 9.0]),
@@ -263,6 +278,7 @@ mod tests {
     #[test]
     fn as_view_delegates_to_synthetic_weather() {
         let osw = OwnedSyntheticWeather::new(
+            "test_site".to_string(),
             vec![1.0, 2.0],
             Some(vec![25.0, 26.0]),
             Some(vec![8.0, 9.0]),
@@ -274,6 +290,7 @@ mod tests {
         .unwrap();
 
         let view = osw.as_view().unwrap();
+        assert_eq!(view.site(), osw.site());
         assert_eq!(view.precip(), osw.precip());
         assert_eq!(view.temp_max(), osw.temp_max());
         assert_eq!(view.temp_min(), osw.temp_min());
@@ -286,8 +303,17 @@ mod tests {
 
     #[test]
     fn empty_owned_synthetic_weather() {
-        let osw =
-            OwnedSyntheticWeather::new(vec![], None, None, vec![], vec![], vec![], 0).unwrap();
+        let osw = OwnedSyntheticWeather::new(
+            "test_site".to_string(),
+            vec![],
+            None,
+            None,
+            vec![],
+            vec![],
+            vec![],
+            0,
+        )
+        .unwrap();
 
         assert!(osw.is_empty());
         assert_eq!(osw.len(), 0);
@@ -296,6 +322,7 @@ mod tests {
     #[test]
     fn multiple_mismatches_reported() {
         let result = OwnedSyntheticWeather::new(
+            "test_site".to_string(),
             vec![1.0, 2.0, 3.0],
             Some(vec![30.0, 31.0]), // wrong length
             Some(vec![10.0]),       // wrong length

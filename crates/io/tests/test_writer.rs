@@ -32,6 +32,7 @@ impl Fixture {
 
     fn as_weather(&self, realisation: u32) -> SyntheticWeather<'_> {
         SyntheticWeather::new(
+            "test_site",
             &self.precip,
             Some(&self.temp_max),
             Some(&self.temp_min),
@@ -64,32 +65,36 @@ fn round_trip_parquet_with_temp() {
     let batches: Vec<RecordBatch> = reader.collect::<Result<Vec<_>, _>>().expect("read batches");
     assert!(!batches.is_empty());
 
-    // Total rows = 2 realisations × 5 rows each = 10
+    // Total rows = 2 realisations * 5 rows each = 10
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 10);
 
-    // Check schema has 7 columns (with temp).
-    assert_eq!(batches[0].num_columns(), 7);
+    // Check schema has 8 columns (with site and temp).
+    assert_eq!(batches[0].num_columns(), 8);
 
     // Verify column names.
     let schema = batches[0].schema();
-    assert_eq!(schema.field(0).name(), "realisation");
-    assert_eq!(schema.field(1).name(), "month");
-    assert_eq!(schema.field(2).name(), "water_year");
-    assert_eq!(schema.field(3).name(), "day_of_year");
-    assert_eq!(schema.field(4).name(), "precip");
-    assert_eq!(schema.field(5).name(), "temp_max");
-    assert_eq!(schema.field(6).name(), "temp_min");
+    assert_eq!(schema.field(0).name(), "site");
+    assert_eq!(schema.field(1).name(), "realisation");
+    assert_eq!(schema.field(2).name(), "month");
+    assert_eq!(schema.field(3).name(), "water_year");
+    assert_eq!(schema.field(4).name(), "day_of_year");
+    assert_eq!(schema.field(5).name(), "precip");
+    assert_eq!(schema.field(6).name(), "temp_max");
+    assert_eq!(schema.field(7).name(), "temp_min");
 
     // Verify first batch values.
     let batch = &batches[0];
-    let realisation_col = batch.column(0).as_primitive::<UInt32Type>();
+    let site_col = batch.column(0).as_string::<i32>();
+    assert_eq!(site_col.value(0), "test_site");
+
+    let realisation_col = batch.column(1).as_primitive::<UInt32Type>();
     assert_eq!(realisation_col.value(0), 0);
 
-    let precip_col = batch.column(4).as_primitive::<Float64Type>();
+    let precip_col = batch.column(5).as_primitive::<Float64Type>();
     assert!((precip_col.value(0) - 0.0).abs() < f64::EPSILON);
 
-    let temp_max_col = batch.column(5).as_primitive::<Float64Type>();
+    let temp_max_col = batch.column(6).as_primitive::<Float64Type>();
     assert!((temp_max_col.value(0) - 25.0).abs() < f64::EPSILON);
 }
 
@@ -103,8 +108,17 @@ fn round_trip_parquet_without_temp() {
     let water_years = vec![2021i32, 2021, 2021];
     let days_of_year = vec![1u16, 32, 60];
 
-    let sw = SyntheticWeather::new(&precip, None, None, &months, &water_years, &days_of_year, 0)
-        .expect("valid");
+    let sw = SyntheticWeather::new(
+        "test_site",
+        &precip,
+        None,
+        None,
+        &months,
+        &water_years,
+        &days_of_year,
+        0,
+    )
+    .expect("valid");
 
     let config = WriterConfig::default();
     write_parquet(&path, &[sw], &config).expect("write succeeds");
@@ -116,7 +130,7 @@ fn round_trip_parquet_without_temp() {
     let batches: Vec<RecordBatch> = reader.collect::<Result<Vec<_>, _>>().expect("read batches");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 3);
-    assert_eq!(batches[0].num_columns(), 5);
+    assert_eq!(batches[0].num_columns(), 6);
 }
 
 #[test]
@@ -130,6 +144,7 @@ fn round_trip_parquet_zstd_compression() {
     let days_of_year: Vec<u16> = (152..162).collect();
 
     let sw = SyntheticWeather::new(
+        "test_site",
         &precip,
         None,
         None,
@@ -152,9 +167,9 @@ fn round_trip_parquet_zstd_compression() {
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 10);
 
-    // Check realisation value.
+    // Check realisation value (column 1, after site at column 0).
     let batch = &batches[0];
-    let r_col = batch.column(0).as_primitive::<UInt32Type>();
+    let r_col = batch.column(1).as_primitive::<UInt32Type>();
     assert_eq!(r_col.value(0), 42);
 }
 
@@ -171,6 +186,7 @@ fn round_trip_verifies_values() {
     let days_of_year = vec![274u16, 275, 276, 305, 306];
 
     let sw = SyntheticWeather::new(
+        "test_site",
         &precip,
         Some(&temp_max),
         Some(&temp_min),
@@ -194,14 +210,20 @@ fn round_trip_verifies_values() {
         .next()
         .expect("at least one batch");
 
-    // Verify every column value.
-    let r = batch.column(0).as_primitive::<UInt32Type>();
-    let m = batch.column(1).as_primitive::<UInt8Type>();
-    let wy = batch.column(2).as_primitive::<Int32Type>();
-    let doy = batch.column(3).as_primitive::<UInt16Type>();
-    let p = batch.column(4).as_primitive::<Float64Type>();
-    let tmax = batch.column(5).as_primitive::<Float64Type>();
-    let tmin = batch.column(6).as_primitive::<Float64Type>();
+    // Verify site column values.
+    let site_col = batch.column(0).as_string::<i32>();
+    for i in 0..5 {
+        assert_eq!(site_col.value(i), "test_site");
+    }
+
+    // Verify every column value (indices shifted +1 for site column).
+    let r = batch.column(1).as_primitive::<UInt32Type>();
+    let m = batch.column(2).as_primitive::<UInt8Type>();
+    let wy = batch.column(3).as_primitive::<Int32Type>();
+    let doy = batch.column(4).as_primitive::<UInt16Type>();
+    let p = batch.column(5).as_primitive::<Float64Type>();
+    let tmax = batch.column(6).as_primitive::<Float64Type>();
+    let tmin = batch.column(7).as_primitive::<Float64Type>();
 
     for i in 0..5 {
         assert_eq!(r.value(i), 7);

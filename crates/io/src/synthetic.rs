@@ -8,6 +8,8 @@ use crate::error::IoError;
 /// it borrows arrays typically held by the generator.
 #[derive(Debug, Clone, Copy)]
 pub struct SyntheticWeather<'a> {
+    /// Site identifier.
+    site: &'a str,
     /// Synthetic precipitation values.
     precip: &'a [f64],
     /// Optional synthetic maximum temperature values.
@@ -32,7 +34,9 @@ impl<'a> SyntheticWeather<'a> {
     ///
     /// Returns [`IoError::Validation`] if any slice length differs from
     /// `precip.len()`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        site: &'a str,
         precip: &'a [f64],
         temp_max: Option<&'a [f64]>,
         temp_min: Option<&'a [f64]>,
@@ -96,6 +100,7 @@ impl<'a> SyntheticWeather<'a> {
         }
 
         Ok(Self {
+            site,
             precip,
             temp_max,
             temp_min,
@@ -104,6 +109,11 @@ impl<'a> SyntheticWeather<'a> {
             days_of_year,
             realisation,
         })
+    }
+
+    /// Returns the site identifier.
+    pub fn site(&self) -> &'a str {
+        self.site
     }
 
     /// Returns the synthetic precipitation slice.
@@ -166,6 +176,7 @@ mod tests {
         let days_of_year = [1u16, 2, 3];
 
         let sw = SyntheticWeather::new(
+            "test_site",
             &precip,
             Some(&tmax),
             Some(&tmin),
@@ -188,8 +199,16 @@ mod tests {
         let water_years = [2021i32, 2021];
         let days_of_year = [180u16, 181];
 
-        let sw =
-            SyntheticWeather::new(&precip, None, None, &months, &water_years, &days_of_year, 5);
+        let sw = SyntheticWeather::new(
+            "test_site",
+            &precip,
+            None,
+            None,
+            &months,
+            &water_years,
+            &days_of_year,
+            5,
+        );
 
         assert!(sw.is_ok());
         let sw = sw.unwrap();
@@ -208,6 +227,7 @@ mod tests {
         let days_of_year = [1u16, 2, 3];
 
         let result = SyntheticWeather::new(
+            "test_site",
             &precip,
             Some(&tmax),
             None,
@@ -238,6 +258,7 @@ mod tests {
         let days_of_year = [60u16, 91];
 
         let sw = SyntheticWeather::new(
+            "test_site",
             &precip,
             Some(&tmax),
             Some(&tmin),
@@ -266,9 +287,17 @@ mod tests {
         let water_years = [2020i32];
         let days_of_year = [1u16];
 
-        let sw =
-            SyntheticWeather::new(&precip, None, None, &months, &water_years, &days_of_year, 0)
-                .unwrap();
+        let sw = SyntheticWeather::new(
+            "test_site",
+            &precip,
+            None,
+            None,
+            &months,
+            &water_years,
+            &days_of_year,
+            0,
+        )
+        .unwrap();
 
         // Assign to another variable; this only compiles if the type is Copy.
         let sw2 = sw;

@@ -50,8 +50,28 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
 
     // 4. Read synthetic Parquet
     info!(path = %args.synthetic.display(), "reading synthetic data");
-    let owned_realisations = read_parquet(&args.synthetic)
+    let mut site_map = read_parquet(&args.synthetic)
         .with_context(|| format!("failed to read Parquet: {}", args.synthetic.display()))?;
+
+    // Extract realisations: use single site if only one, otherwise look up by observed site key
+    let site_key = multi_site
+        .keys()
+        .next()
+        .expect("single site validated above")
+        .clone();
+    let owned_realisations: Vec<zeus_io::OwnedSyntheticWeather> = if site_map.len() == 1 {
+        site_map.into_values().next().unwrap_or_default()
+    } else {
+        site_map.remove(&site_key).ok_or_else(|| {
+            let available: Vec<_> = site_map.keys().collect();
+            anyhow::anyhow!(
+                "observed site '{}' not found in synthetic data (available: {:?})",
+                site_key,
+                available,
+            )
+        })?
+    };
+
     info!(
         n_realisations = owned_realisations.len(),
         "synthetic data loaded"
@@ -69,12 +89,6 @@ pub fn run(args: EvaluateArgs) -> Result<()> {
         .context("failed to build synthetic weather views")?;
 
     // 6. Build MultiSiteSynthetic — assign all realisations to the observed site key
-    let site_key = multi_site
-        .keys()
-        .next()
-        .expect("single site validated above")
-        .clone();
-
     let mut eval_views: BTreeMap<String, Vec<SyntheticWeather<'_>>> = BTreeMap::new();
     eval_views.insert(site_key, views);
 

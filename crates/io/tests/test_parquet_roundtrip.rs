@@ -32,6 +32,7 @@ impl Fixture {
 
     fn as_weather_with_temp(&self, realisation: u32) -> SyntheticWeather<'_> {
         SyntheticWeather::new(
+            "test_site",
             &self.precip,
             Some(&self.temp_max),
             Some(&self.temp_min),
@@ -45,6 +46,7 @@ impl Fixture {
 
     fn as_weather_no_temp(&self, realisation: u32) -> SyntheticWeather<'_> {
         SyntheticWeather::new(
+            "test_site",
             &self.precip,
             None,
             None,
@@ -70,10 +72,12 @@ fn round_trip_with_temp() {
     write_parquet(&path, &realisations, &config).expect("write succeeds");
 
     let result = read_parquet(&path).expect("read succeeds");
-    assert_eq!(result.len(), 2);
+    assert_eq!(result.len(), 1); // 1 site
+    let reals = &result["test_site"];
+    assert_eq!(reals.len(), 2);
 
     // Verify realisation 0.
-    let r0 = &result[0];
+    let r0 = &reals[0];
     assert_eq!(r0.realisation(), 0);
     assert_eq!(r0.len(), 5);
     assert_eq!(r0.precip(), f0.precip.as_slice());
@@ -84,7 +88,7 @@ fn round_trip_with_temp() {
     assert_eq!(r0.days_of_year(), f0.days_of_year.as_slice());
 
     // Verify realisation 1.
-    let r1 = &result[1];
+    let r1 = &reals[1];
     assert_eq!(r1.realisation(), 1);
     assert_eq!(r1.len(), 5);
     assert_eq!(r1.precip(), f1.precip.as_slice());
@@ -107,9 +111,11 @@ fn round_trip_without_temp() {
     write_parquet(&path, &realisations, &config).expect("write succeeds");
 
     let result = read_parquet(&path).expect("read succeeds");
-    assert_eq!(result.len(), 1);
+    assert_eq!(result.len(), 1); // 1 site
+    let reals = &result["test_site"];
+    assert_eq!(reals.len(), 1);
 
-    let r0 = &result[0];
+    let r0 = &reals[0];
     assert_eq!(r0.realisation(), 0);
     assert_eq!(r0.len(), 4);
     assert_eq!(r0.precip(), f0.precip.as_slice());
@@ -148,12 +154,14 @@ fn round_trip_as_view_bridge() {
 
     write_parquet(&path, &realisations, &WriterConfig::default()).expect("write succeeds");
 
-    let owned: Vec<OwnedSyntheticWeather> = read_parquet(&path).expect("read succeeds");
+    let result = read_parquet(&path).expect("read succeeds");
+    let owned: &Vec<OwnedSyntheticWeather> = &result["test_site"];
     assert_eq!(owned.len(), 1);
 
     // Convert to a borrowed SyntheticWeather view.
     let view: SyntheticWeather<'_> = owned[0].as_view().expect("as_view succeeds");
 
+    assert_eq!(view.site(), owned[0].site());
     assert_eq!(view.precip(), owned[0].precip());
     assert_eq!(view.temp_max(), owned[0].temp_max());
     assert_eq!(view.temp_min(), owned[0].temp_min());

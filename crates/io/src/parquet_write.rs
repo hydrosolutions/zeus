@@ -4,7 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Float64Array, Int32Array, RecordBatch, UInt8Array, UInt16Array, UInt32Array,
+    ArrayRef, Float64Array, Int32Array, RecordBatch, StringArray, UInt8Array, UInt16Array,
+    UInt32Array,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use parquet::arrow::ArrowWriter;
@@ -20,6 +21,7 @@ use crate::synthetic::SyntheticWeather;
 /// appended.
 pub(crate) fn build_schema(has_temp: bool) -> Schema {
     let mut fields = vec![
+        Field::new("site", DataType::Utf8, false),
         Field::new("realisation", DataType::UInt32, false),
         Field::new("month", DataType::UInt8, false),
         Field::new("water_year", DataType::Int32, false),
@@ -46,6 +48,7 @@ pub(crate) fn synthetic_to_record_batch(
 ) -> Result<RecordBatch, IoError> {
     let n = weather.len();
 
+    let site_col: ArrayRef = Arc::new(StringArray::from(vec![weather.site(); n]));
     let realisation_col: ArrayRef = Arc::new(UInt32Array::from(vec![weather.realisation(); n]));
     let month_col: ArrayRef = Arc::new(UInt8Array::from(weather.months().to_vec()));
     let water_year_col: ArrayRef = Arc::new(Int32Array::from(weather.water_years().to_vec()));
@@ -53,6 +56,7 @@ pub(crate) fn synthetic_to_record_batch(
     let precip_col: ArrayRef = Arc::new(Float64Array::from(weather.precip().to_vec()));
 
     let mut columns: Vec<ArrayRef> = vec![
+        site_col,
         realisation_col,
         month_col,
         water_year_col,
@@ -61,7 +65,7 @@ pub(crate) fn synthetic_to_record_batch(
     ];
 
     // If the schema includes temperature columns, append them.
-    if schema.fields().len() > 5 {
+    if schema.fields().len() > 6 {
         if let Some(tmax) = weather.temp_max() {
             columns.push(Arc::new(Float64Array::from(tmax.to_vec())));
         }
@@ -107,20 +111,21 @@ mod tests {
     #[test]
     fn schema_without_temp() {
         let schema = build_schema(false);
-        assert_eq!(schema.fields().len(), 5);
-        assert_eq!(schema.field(0).name(), "realisation");
-        assert_eq!(schema.field(1).name(), "month");
-        assert_eq!(schema.field(2).name(), "water_year");
-        assert_eq!(schema.field(3).name(), "day_of_year");
-        assert_eq!(schema.field(4).name(), "precip");
+        assert_eq!(schema.fields().len(), 6);
+        assert_eq!(schema.field(0).name(), "site");
+        assert_eq!(schema.field(1).name(), "realisation");
+        assert_eq!(schema.field(2).name(), "month");
+        assert_eq!(schema.field(3).name(), "water_year");
+        assert_eq!(schema.field(4).name(), "day_of_year");
+        assert_eq!(schema.field(5).name(), "precip");
     }
 
     #[test]
     fn schema_with_temp() {
         let schema = build_schema(true);
-        assert_eq!(schema.fields().len(), 7);
-        assert_eq!(schema.field(5).name(), "temp_max");
-        assert_eq!(schema.field(6).name(), "temp_min");
+        assert_eq!(schema.fields().len(), 8);
+        assert_eq!(schema.field(6).name(), "temp_max");
+        assert_eq!(schema.field(7).name(), "temp_min");
     }
 
     #[test]
@@ -130,15 +135,23 @@ mod tests {
         let water_years = [2020i32, 2020, 2020];
         let days_of_year = [1u16, 32, 60];
 
-        let sw =
-            SyntheticWeather::new(&precip, None, None, &months, &water_years, &days_of_year, 0)
-                .unwrap();
+        let sw = SyntheticWeather::new(
+            "test_site",
+            &precip,
+            None,
+            None,
+            &months,
+            &water_years,
+            &days_of_year,
+            0,
+        )
+        .unwrap();
 
         let schema = build_schema(false);
         let batch = synthetic_to_record_batch(&sw, &schema).unwrap();
 
         assert_eq!(batch.num_rows(), 3);
-        assert_eq!(batch.num_columns(), 5);
+        assert_eq!(batch.num_columns(), 6);
     }
 
     #[test]
@@ -151,6 +164,7 @@ mod tests {
         let days_of_year = [152u16, 182];
 
         let sw = SyntheticWeather::new(
+            "test_site",
             &precip,
             Some(&tmax),
             Some(&tmin),
@@ -165,6 +179,6 @@ mod tests {
         let batch = synthetic_to_record_batch(&sw, &schema).unwrap();
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 7);
+        assert_eq!(batch.num_columns(), 8);
     }
 }

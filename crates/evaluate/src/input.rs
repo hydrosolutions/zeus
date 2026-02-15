@@ -133,6 +133,7 @@ mod tests {
         let days_static: &'static [u16] = Box::leak(days.into_boxed_slice());
 
         let sw = SyntheticWeather::new(
+            "test_site",
             precip_static,
             None,
             None,
