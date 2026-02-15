@@ -95,6 +95,18 @@ impl NoLeapDate {
             Self::from_year_doy(self.year, Doy::new(self.doy + 1).expect("doy + 1 <= 365"))
         }
     }
+
+    /// Returns the date `n` days after (or before, if negative) this date,
+    /// using pure 365-day no-leap arithmetic.
+    pub fn add_days(self, n: i64) -> Self {
+        let abs = self.year as i64 * 365 + (self.doy - 1) as i64 + n;
+        let new_year = abs.div_euclid(365) as i32;
+        let new_doy = abs.rem_euclid(365) as u16 + 1;
+        Self::from_year_doy(
+            new_year,
+            Doy::new(new_doy).expect("rem_euclid(365) + 1 is always in 1..=365"),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -226,5 +238,83 @@ mod tests {
     fn hash_trait() {
         fn assert_hash<T: std::hash::Hash>() {}
         assert_hash::<NoLeapDate>();
+    }
+
+    #[test]
+    fn add_days_zero() {
+        let date = NoLeapDate::new(2000, 6, 15).unwrap();
+        assert_eq!(date.add_days(0), date);
+    }
+
+    #[test]
+    fn add_days_one_matches_next() {
+        for (y, m, d) in [(2000, 1, 15), (2000, 1, 31), (2000, 2, 28), (2000, 12, 31)] {
+            let date = NoLeapDate::new(y, m, d).unwrap();
+            assert_eq!(date.add_days(1), date.next(), "mismatch for {y}-{m}-{d}");
+        }
+    }
+
+    #[test]
+    fn add_days_365_advances_one_year() {
+        let date = NoLeapDate::new(2000, 1, 1).unwrap();
+        let expected = NoLeapDate::new(2001, 1, 1).unwrap();
+        assert_eq!(date.add_days(365), expected);
+    }
+
+    #[test]
+    fn add_days_crosses_year_forward() {
+        let dec31 = NoLeapDate::new(2000, 12, 31).unwrap();
+        let jan1 = NoLeapDate::new(2001, 1, 1).unwrap();
+        assert_eq!(dec31.add_days(1), jan1);
+    }
+
+    #[test]
+    fn add_days_crosses_year_backward() {
+        let jan1 = NoLeapDate::new(2001, 1, 1).unwrap();
+        let dec31 = NoLeapDate::new(2000, 12, 31).unwrap();
+        assert_eq!(jan1.add_days(-1), dec31);
+    }
+
+    #[test]
+    fn add_days_offset_59_skips_feb29() {
+        // In noleap, Jan 1 + 59 days = DOY 60 = Mar 1 (NOT Feb 29)
+        let date = NoLeapDate::new(2000, 1, 1).unwrap();
+        let result = date.add_days(59);
+        assert_eq!(result.month(), 3);
+        assert_eq!(result.day(), 1);
+        assert_eq!(result.doy().get(), 60);
+    }
+
+    #[test]
+    fn add_days_negative() {
+        let mar1 = NoLeapDate::new(2000, 3, 1).unwrap();
+        let feb28 = NoLeapDate::new(2000, 2, 28).unwrap();
+        assert_eq!(mar1.add_days(-1), feb28);
+    }
+
+    #[test]
+    fn add_days_large_offset() {
+        let date = NoLeapDate::new(2000, 1, 1).unwrap();
+        let expected = NoLeapDate::new(2010, 1, 1).unwrap();
+        assert_eq!(date.add_days(3650), expected);
+    }
+
+    #[test]
+    fn add_days_negative_year() {
+        let date = NoLeapDate::new(0, 1, 1).unwrap();
+        let expected = NoLeapDate::new(-1, 12, 31).unwrap();
+        assert_eq!(date.add_days(-1), expected);
+    }
+
+    #[test]
+    fn add_days_roundtrip() {
+        let date = NoLeapDate::new(2000, 7, 4).unwrap();
+        for n in [1, 7, 30, 365, 1000, -1, -7, -30, -365, -1000] {
+            assert_eq!(
+                date.add_days(n).add_days(-n),
+                date,
+                "roundtrip failed for n={n}"
+            );
+        }
     }
 }

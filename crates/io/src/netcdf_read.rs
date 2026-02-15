@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use netcdf::AttributeValue;
 use zeus_calendar::NoLeapDate;
 
@@ -124,6 +124,8 @@ pub(crate) fn read_time_units(
         })?;
 
     // Read the optional "calendar" attribute, defaulting to "noleap".
+    // CF convention defaults to "standard" (Gregorian), but Zeus only
+    // supports noleap calendars, so we default to "noleap" here.
     let calendar = var
         .attribute_value("calendar")
         .and_then(|res| res.ok())
@@ -138,46 +140,40 @@ pub(crate) fn read_time_units(
 
 /// Convert floating-point day offsets from a base date into [`NoLeapDate`]s.
 ///
-/// Each offset is rounded to an integer number of days, added to `base_date`
-/// using chrono arithmetic, and then converted to a `NoLeapDate`.
+/// Each offset is truncated to an integer number of days and added using
+/// pure 365-day no-leap arithmetic via [`NoLeapDate::add_days`].
+///
+/// # Supported calendars
+///
+/// `"noleap"`, `"no_leap"`, `"365_day"` (case-insensitive).
 pub(crate) fn time_offsets_to_dates(
     base_date: NaiveDate,
     offsets: &[f64],
-    _calendar: &str,
+    calendar: &str,
 ) -> Result<Vec<NoLeapDate>, IoError> {
+    match calendar.to_lowercase().as_str() {
+        "noleap" | "no_leap" | "365_day" => {}
+        other => {
+            return Err(IoError::Calendar {
+                reason: format!("unsupported calendar: '{other}'"),
+            });
+        }
+    }
+
+    let base = NoLeapDate::new(
+        base_date.year(),
+        base_date.month() as u8,
+        base_date.day() as u8,
+    )
+    .map_err(|e| IoError::Calendar {
+        reason: format!("failed to convert base date: {e}"),
+    })?;
+
     offsets
         .iter()
         .map(|&offset| {
             let days = offset as i64;
-            let greg = base_date
-                .checked_add_signed(chrono::TimeDelta::days(days))
-                .ok_or_else(|| IoError::InvalidTime {
-                    reason: format!("date overflow adding {days} days to {base_date}"),
-                })?;
-
-            let year =
-                greg.format("%Y")
-                    .to_string()
-                    .parse::<i32>()
-                    .map_err(|e| IoError::InvalidTime {
-                        reason: format!("failed to parse year: {e}"),
-                    })?;
-            let month =
-                greg.format("%m")
-                    .to_string()
-                    .parse::<u8>()
-                    .map_err(|e| IoError::InvalidTime {
-                        reason: format!("failed to parse month: {e}"),
-                    })?;
-            let day =
-                greg.format("%d")
-                    .to_string()
-                    .parse::<u8>()
-                    .map_err(|e| IoError::InvalidTime {
-                        reason: format!("failed to parse day: {e}"),
-                    })?;
-
-            NoLeapDate::new(year, month, day).map_err(IoError::from)
+            Ok(base.add_days(days))
         })
         .collect()
 }
@@ -210,12 +206,10 @@ mod tests {
         assert_eq!(dates[2].month(), 1);
         assert_eq!(dates[2].day(), 11);
 
-        // Day 365 => 2000-12-31 in gregorian, which is also valid in noleap
-        // (chrono gives 2000-12-31 since 2000 is a leap year in gregorian;
-        //  but 365 days from Jan 1 in a leap year is Dec 31)
-        assert_eq!(dates[3].year(), 2000);
-        assert_eq!(dates[3].month(), 12);
-        assert_eq!(dates[3].day(), 31);
+        // Day 365 => 2001-01-01 in noleap (365-day years)
+        assert_eq!(dates[3].year(), 2001);
+        assert_eq!(dates[3].month(), 1);
+        assert_eq!(dates[3].day(), 1);
     }
 
     #[test]
@@ -247,13 +241,53 @@ mod tests {
     }
 
     #[test]
-    fn offsets_to_dates_feb29_rejected() {
-        // In gregorian 2000 is a leap year, so day 59 from Jan 1 is Feb 29.
-        // NoLeapDate should reject this.
+    fn offsets_to_dates_feb29_becomes_mar1() {
+        // In noleap, offset 59 from Jan 1 is DOY 60 = Mar 1 (Feb has only 28 days).
         let base = NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date");
-        let offsets = vec![59.0]; // Feb 29 in leap year
+        let offsets = vec![59.0];
 
-        let result = time_offsets_to_dates(base, &offsets, "noleap");
+        let dates = time_offsets_to_dates(base, &offsets, "noleap").expect("conversion succeeds");
+
+        assert_eq!(dates[0].year(), 2000);
+        assert_eq!(dates[0].month(), 3);
+        assert_eq!(dates[0].day(), 1);
+    }
+
+    #[test]
+    fn offsets_to_dates_multi_year() {
+        let base = NaiveDate::from_ymd_opt(1984, 1, 1).expect("valid date");
+        let offsets = vec![0.0, 365.0, 730.0, 1095.0, 1460.0];
+
+        let dates = time_offsets_to_dates(base, &offsets, "noleap").expect("conversion succeeds");
+
+        for (i, date) in dates.iter().enumerate() {
+            assert_eq!(date.year(), 1984 + i as i32, "year mismatch at index {i}");
+            assert_eq!(date.month(), 1, "month mismatch at index {i}");
+            assert_eq!(date.day(), 1, "day mismatch at index {i}");
+        }
+    }
+
+    #[test]
+    fn offsets_to_dates_calendar_variants() {
+        let base = NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date");
+        let offsets = vec![10.0];
+
+        for cal in ["noleap", "365_day", "no_leap"] {
+            let dates = time_offsets_to_dates(base, &offsets, cal).expect("conversion succeeds");
+            assert_eq!(dates[0].month(), 1);
+            assert_eq!(dates[0].day(), 11);
+        }
+    }
+
+    #[test]
+    fn offsets_to_dates_unsupported_calendar() {
+        let base = NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date");
+        let result = time_offsets_to_dates(base, &[0.0], "standard");
         assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, IoError::Calendar { .. }),
+            "expected IoError::Calendar, got: {err:?}"
+        );
     }
 }
