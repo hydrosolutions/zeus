@@ -72,8 +72,8 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     // Step 5: Compute area-averaged observed data across all sites
     let area_avg_obs = area_average_observed(&multi_site, config.io.start_month)?;
     info!(
-        n_sites = multi_site.n_sites(),
-        "computed area-averaged observations"
+        from_sites = multi_site.n_sites(),
+        "area-averaged observations into single timeseries"
     );
 
     // Step 6: Compute area-averaged annual precipitation
@@ -138,7 +138,8 @@ pub fn run(args: GenerateArgs) -> Result<()> {
 
     info!(
         path = %output.display(),
-        n_realisations = all_views.len(),
+        n_sites = multi_site.n_sites(),
+        n_realisations = filtered.n_selected(),
         "writing synthetic data"
     );
     write_parquet(output, &all_views, &writer_cfg)
