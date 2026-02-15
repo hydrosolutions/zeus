@@ -11,10 +11,10 @@ use tracing_subscriber::EnvFilter;
 /// `RUST_LOG` env var overrides the CLI flag if set.
 pub fn init(verbosity: u8) {
     let default_filter = match verbosity {
-        0 => "zeus=warn,zeus_io=warn",
-        1 => "zeus=info,zeus_io=info",
-        2 => "zeus=debug,zeus_io=debug",
-        _ => "zeus=trace,zeus_io=trace",
+        0 => "zeus=warn,zeus_io=warn,zeus_wavelet=warn",
+        1 => "zeus=info,zeus_io=info,zeus_wavelet=info",
+        2 => "zeus=debug,zeus_io=debug,zeus_wavelet=debug",
+        _ => "zeus=trace,zeus_io=trace,zeus_wavelet=trace",
     };
 
     let filter =

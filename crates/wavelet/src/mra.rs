@@ -4,26 +4,32 @@ use crate::error::WaveletError;
 use crate::filter::WaveletFilter;
 use crate::modwt::{ModwtCoeffs, ModwtConfig, imodwt, max_modwt_level, modwt};
 use crate::series::TimeSeries;
+use tracing::warn;
 
-/// Selects MRA decomposition levels based on the series length and
-/// maximum period fraction.
+/// Selects MRA decomposition levels based on the series length,
+/// maximum period fraction, and wavelet filter feasibility.
 ///
 /// Returns levels where the wavelet period `2^j` does not exceed
-/// `max_period_frac * n`.
+/// `max_period_frac * n` **and** `j` does not exceed
+/// [`max_modwt_level(n, filter)`](crate::max_modwt_level).
 ///
 /// # Example
 ///
 /// ```ignore
-/// use zeus_wavelet::select_levels;
+/// use zeus_wavelet::{select_levels, WaveletFilter};
 ///
-/// let levels = select_levels(365, 1.0 / 3.0);
-/// assert_eq!(levels, vec![1, 2, 3, 4, 5, 6]);
+/// let levels = select_levels(365, 1.0 / 3.0, &WaveletFilter::La8);
+/// assert_eq!(levels, vec![1, 2, 3, 4, 5]);
 /// ```
-pub fn select_levels(n: usize, max_period_frac: f64) -> Vec<usize> {
+pub fn select_levels(n: usize, max_period_frac: f64, filter: &WaveletFilter) -> Vec<usize> {
     let max_period = max_period_frac * n as f64;
+    let max_level = max_modwt_level(n, filter);
     let mut levels = Vec::new();
     let mut j = 1;
     loop {
+        if j > max_level {
+            break;
+        }
         let period = 2.0_f64.powi(j as i32);
         if period > max_period {
             break;
@@ -37,6 +43,8 @@ pub fn select_levels(n: usize, max_period_frac: f64) -> Vec<usize> {
 /// Configuration for a Multiresolution Analysis.
 ///
 /// Use the builder methods to customize the analysis parameters.
+/// When `n_levels` is omitted, auto-selection clamps to the filter's
+/// maximum feasible MODWT level.
 ///
 /// # Example
 ///
@@ -199,11 +207,16 @@ impl Mra {
 
 /// Performs a Multiresolution Analysis on the given time series.
 ///
+/// When `n_levels` is omitted from the config, levels are auto-selected
+/// respecting both the period-fraction threshold and the filter's maximum
+/// feasible MODWT level. [`WaveletError::LevelTooHigh`] only triggers for
+/// explicitly requested levels that exceed the filter constraint.
+///
 /// # Errors
 ///
 /// | Variant | Trigger |
 /// |---------|---------|
-/// | [`WaveletError::LevelTooHigh`] | requested levels exceed maximum |
+/// | [`WaveletError::LevelTooHigh`] | explicitly requested levels exceed maximum |
 /// | [`WaveletError::MraFailed`] | numerical failure during analysis |
 pub fn mra(series: &TimeSeries, config: &MraConfig) -> Result<Mra, WaveletError> {
     let data = series.as_slice();
@@ -214,12 +227,24 @@ pub fn mra(series: &TimeSeries, config: &MraConfig) -> Result<Mra, WaveletError>
     let j = match config.n_levels() {
         Some(levels) => levels,
         None => {
-            let levels = select_levels(n, config.max_period_frac());
-            *levels.last().ok_or_else(|| {
+            let levels = select_levels(n, config.max_period_frac(), &filter);
+            let selected = *levels.last().ok_or_else(|| {
                 WaveletError::MraFailed(
                     "no valid decomposition levels for this series length".into(),
                 )
-            })?
+            })?;
+            let max_level = max_modwt_level(n, &filter);
+            let next_period = 2.0_f64.powi((selected + 1) as i32);
+            let max_period = config.max_period_frac() * n as f64;
+            if selected == max_level && next_period <= max_period {
+                warn!(
+                    filter_max = max_level,
+                    series_len = n,
+                    filter = ?filter,
+                    "MRA auto-selected levels clamped by filter length constraint"
+                );
+            }
+            selected
         }
     };
 
@@ -331,20 +356,62 @@ mod tests {
 
     #[test]
     fn select_levels_365() {
-        let levels = select_levels(365, 1.0 / 3.0);
-        assert_eq!(levels, vec![1, 2, 3, 4, 5, 6]);
+        let levels = select_levels(365, 1.0 / 3.0, &WaveletFilter::La8);
+        assert_eq!(levels, vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn select_levels_small_n() {
-        let levels = select_levels(8, 1.0 / 3.0);
+        let levels = select_levels(8, 1.0 / 3.0, &WaveletFilter::La8);
         assert_eq!(levels, vec![1]);
     }
 
     #[test]
     fn select_levels_zero_frac() {
-        let levels = select_levels(365, 0.0);
+        let levels = select_levels(365, 0.0, &WaveletFilter::La8);
         assert!(levels.is_empty());
+    }
+
+    #[test]
+    fn select_levels_n41_la8_clamped() {
+        // Regression: N=41, La8 — period allows [1,2,3] but filter max is 2
+        let levels = select_levels(41, 1.0 / 3.0, &WaveletFilter::La8);
+        assert_eq!(levels, vec![1, 2]);
+    }
+
+    #[test]
+    fn select_levels_filter_constraint_binding() {
+        // N=41, La16 — max_modwt_level = 1, period allows [1,2,3]
+        let levels = select_levels(41, 1.0 / 3.0, &WaveletFilter::La16);
+        assert_eq!(levels, vec![1]);
+    }
+
+    #[test]
+    fn select_levels_period_constraint_binding() {
+        // N=41, Haar — max_modwt_level = 5, period allows [1,2,3], no clamping
+        let levels = select_levels(41, 1.0 / 3.0, &WaveletFilter::Haar);
+        assert_eq!(levels, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn select_levels_max_level_zero() {
+        // N=4, La8 — max_modwt_level = 0, no levels feasible
+        let levels = select_levels(4, 1.0 / 3.0, &WaveletFilter::La8);
+        assert!(levels.is_empty());
+    }
+
+    #[test]
+    fn select_levels_large_frac_la8_clamped() {
+        // N=41, La8, frac=1.0 — period allows many levels but filter max is 2
+        let levels = select_levels(41, 1.0, &WaveletFilter::La8);
+        assert_eq!(levels, vec![1, 2]);
+    }
+
+    #[test]
+    fn select_levels_haar_large_frac() {
+        // N=256, Haar, frac=1.0 — both constraints agree at level 8
+        let levels = select_levels(256, 1.0, &WaveletFilter::Haar);
+        assert_eq!(levels, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]
@@ -627,5 +694,48 @@ mod tests {
             v.abs() < f64::EPSILON,
             "single-element variance = {v}, expected 0.0"
         );
+    }
+
+    #[test]
+    fn mra_auto_levels_short_series() {
+        // N=41, La8, auto-select — must succeed (was the original bug)
+        let data: Vec<f64> = (0..41).map(|i| (i as f64 * 0.3).sin()).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        let config = MraConfig::new(WaveletFilter::La8);
+        let result = mra(&ts, &config).unwrap();
+        assert_eq!(result.n_detail_levels(), 2);
+        assert!(
+            result.reconstruction_error() < 1e-6,
+            "reconstruction error too high: {}",
+            result.reconstruction_error()
+        );
+    }
+
+    #[test]
+    fn mra_auto_levels_all_filters() {
+        // N=41, all 6 filters, auto-select — all must succeed
+        let data: Vec<f64> = (0..41).map(|i| (i as f64 * 0.3).sin()).collect();
+        let ts = TimeSeries::new(data).unwrap();
+        for filter in [
+            WaveletFilter::Haar,
+            WaveletFilter::D4,
+            WaveletFilter::D6,
+            WaveletFilter::D8,
+            WaveletFilter::La8,
+            WaveletFilter::La16,
+        ] {
+            let config = MraConfig::new(filter);
+            let result = mra(&ts, &config).unwrap_or_else(|e| {
+                panic!("mra failed for {:?}: {}", filter, e);
+            });
+            let max_level = max_modwt_level(41, &filter);
+            assert!(
+                result.n_detail_levels() <= max_level,
+                "{:?}: n_detail_levels {} > max_modwt_level {}",
+                filter,
+                result.n_detail_levels(),
+                max_level
+            );
+        }
     }
 }

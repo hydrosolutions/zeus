@@ -2148,6 +2148,7 @@ dependencies = [
  "rustfft",
  "statrs",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

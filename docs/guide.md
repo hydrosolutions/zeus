@@ -168,7 +168,7 @@ var_tol = 0.1
 | `n_sim` | integer | no | `1000` | Number of stochastic simulations. |
 | `n_years` | integer | no | `50` | Years per simulation. |
 | `wavelet_filter` | string | no | `"la8"` | Wavelet filter. Options: `"haar"`, `"d4"`, `"d6"`, `"d8"`, `"la8"`, `"la16"`. |
-| `mra_levels` | integer or null | no | auto | MRA decomposition levels. Auto-computed from series length when omitted. |
+| `mra_levels` | integer or null | no | auto | MRA decomposition levels. Auto-computed from series length and wavelet filter when omitted. |
 | `bypass_n` | integer | no | `30` | Burn-in simulations discarded before collecting results. |
 | `max_arma_order` | [integer, integer] | no | `[5, 3]` | Maximum `[p, q]` for ARMA order selection via AIC. |
 | `match_variance` | boolean | no | `true` | Apply variance matching to simulated MRA components. |
