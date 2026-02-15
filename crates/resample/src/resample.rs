@@ -19,7 +19,7 @@ use zeus_markov::{MarkovConfig, PrecipState};
 /// - `prev_obs_idx` — observation index of the previous day (None for year 1)
 /// - `config` — resampler configuration
 /// - `rng` — random number generator
-#[tracing::instrument(skip(obs, rng), fields(sim_annual_precip, initial_state = ?initial_state))]
+#[tracing::instrument(skip_all, fields(sim_annual_precip, initial_state = ?initial_state, prev_obs_idx))]
 #[allow(clippy::too_many_arguments)]
 pub fn resample_year(
     sim_annual_precip: f64,
@@ -68,7 +68,7 @@ pub fn resample_year(
 /// chaining Markov state and observation index across years.
 ///
 /// Returns a flat `Vec<usize>` of length `sim_annual_precip.len() * 365`.
-#[tracing::instrument(skip(obs, rng), fields(n_years = sim_annual_precip.len()))]
+#[tracing::instrument(skip_all, fields(n_years = sim_annual_precip.len()))]
 pub fn resample_dates(
     sim_annual_precip: &[f64],
     obs: &ObsData,

@@ -31,7 +31,7 @@ pub use output::{
 /// Returns [`EvaluateError::Validation`] if site keys don't match between
 /// observed and synthetic data.
 /// Returns [`EvaluateError::Serialization`] if JSON serialization fails.
-#[tracing::instrument(skip(observed, synthetic), fields(n_sites = observed.n_sites()))]
+#[tracing::instrument(skip_all, fields(n_sites = observed.n_sites()))]
 pub fn evaluate(
     observed: &MultiSiteData,
     synthetic: &MultiSiteSynthetic<'_>,

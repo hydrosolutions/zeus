@@ -120,7 +120,7 @@ fn count_unique(values: &[f64]) -> usize {
 /// For each calendar month (1..=12), collects wet-day values that exceed
 /// `config.intensity_threshold()`, then fits a Gamma distribution via
 /// method-of-moments if enough events are present.
-#[tracing::instrument(skip(precip, month), fields(n_obs = precip.len()))]
+#[tracing::instrument(skip_all, fields(n_obs = precip.len()))]
 pub fn fit_monthly(precip: &[f64], month: &[u8], config: &QmConfig) -> BaselineFit {
     let mut params: [Option<GammaParams>; 12] = [None; 12];
     let mut skipped_months = Vec::new();

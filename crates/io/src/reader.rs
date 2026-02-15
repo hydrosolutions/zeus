@@ -188,23 +188,26 @@ pub fn read_netcdf(path: &Path, config: &ReaderConfig) -> Result<MultiSiteData, 
 
     let mut sites = BTreeMap::new();
     let mut valid_indices = Vec::new();
+    let mut skipped_precip = Vec::new();
+    let mut skipped_tmax = Vec::new();
+    let mut skipped_tmin = Vec::new();
 
     for c in 0..n_cells {
         // Skip cells where all timesteps are NaN for any configured variable.
         if cell_all_nan(&precip_data, c, n_cells, start_idx, end_idx) {
-            debug!(cell = c, "skipping cell: precipitation all NaN");
+            skipped_precip.push(c);
             continue;
         }
         if let Some((data, _)) = &tmax_data
             && cell_all_nan(data, c, n_cells, start_idx, end_idx)
         {
-            debug!(cell = c, "skipping cell: tmax all NaN");
+            skipped_tmax.push(c);
             continue;
         }
         if let Some((data, _)) = &tmin_data
             && cell_all_nan(data, c, n_cells, start_idx, end_idx)
         {
-            debug!(cell = c, "skipping cell: tmin all NaN");
+            skipped_tmin.push(c);
             continue;
         }
 
@@ -240,6 +243,16 @@ pub fn read_netcdf(path: &Path, config: &ReaderConfig) -> Result<MultiSiteData, 
 
         let key = format!("cell_{c:04}");
         sites.insert(key, obs);
+    }
+
+    if !skipped_precip.is_empty() {
+        debug!(count = skipped_precip.len(), cells = ?skipped_precip, "skipped cells: precipitation all NaN");
+    }
+    if !skipped_tmax.is_empty() {
+        debug!(count = skipped_tmax.len(), cells = ?skipped_tmax, "skipped cells: tmax all NaN");
+    }
+    if !skipped_tmin.is_empty() {
+        debug!(count = skipped_tmin.len(), cells = ?skipped_tmin, "skipped cells: tmin all NaN");
     }
 
     // -- Log skip summary and check for all-missing -------------------------
